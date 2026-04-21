@@ -1,23 +1,30 @@
-# Memoflow Conversation Backend
+# Memoflow Memory-Aware Agent Backend
 
-Minimal FastAPI backend extracted from Flick's AI ReAct conversation stack.
+FastAPI backend extracted from Flick's AI ReAct conversation stack and extended into the first working Memoflow memory runtime.
 
-This foundation intentionally keeps only:
+Current runtime provides:
 
 - Streaming `/api/chat`
 - In-process session CRUD for normal multi-turn chat
 - DeepSeek, Kimi, and Ollama provider adapters
 - ReAct tool loop with a minimal safe `current_time` tool
+- durable episode persistence
+- inspectable short-term state
+- model-driven memory atom ingestion through local sidecar `qwen3:30b-a3b`
+- retrieval event persistence
+- memory retrieval and prompt-side context injection
 - Health, model, info, and tool listing endpoints
 
-It intentionally excludes long-term memory, memory extraction, memory persistence, summarization, vector retrieval, device control, Telegram, MiHome, Home Assistant, email, and web scraping logic.
+It still excludes graph memory, contradiction reconciliation, external queue workers, device control, Telegram, MiHome, Home Assistant, email, and web scraping logic.
 
-Memory v0.1 is now being added behind explicit runtime modules. Current implemented scope:
+Memory v0.1 implemented scope:
 
 - durable episode storage
 - inspectable short-term state
 - task-specialized harness config
-- conservative ADD-only memory atom ingestion
+- model-driven ADD-only memory atom ingestion
+- retrieval event inspection
+- pre-chat memory retrieval and context assembly
 - memory inspection APIs under `/api/memory/*`
 
 ## Run
@@ -60,4 +67,5 @@ curl.exe http://localhost:3001/api/memory/harnesses
 curl.exe http://localhost:3001/api/memory/episodes
 curl.exe http://localhost:3001/api/memory/short-term
 curl.exe http://localhost:3001/api/memory/atoms
+curl.exe http://localhost:3001/api/memory/retrieval-events
 ```

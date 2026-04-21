@@ -28,6 +28,7 @@ from services.memory.api_service import (
     list_episodes_payload,
     list_harnesses_payload,
     list_memory_atoms_payload,
+    list_retrieval_events_payload,
     list_short_term_states_payload,
     memory_status_payload,
     search_memory_payload,
@@ -75,7 +76,7 @@ async def root() -> Dict[str, str]:
         "status": "running",
         "version": settings.API_VERSION,
         "docs": "/docs",
-        "memory_processing": "disabled",
+        "memory_processing": "enabled" if settings.MEMORY_ENABLED else "disabled",
     }
 
 
@@ -197,6 +198,13 @@ async def search_memory(request: MemorySearchRequest):
     )
 
 
+async def list_memory_retrieval_events(session_id: str | None = None, limit: int = 50):
+    return await _run_with_500(
+        lambda: list_retrieval_events_payload(session_id=session_id, limit=limit),
+        "Failed to list retrieval events",
+    )
+
+
 register_system_routes(
     app,
     root=root,
@@ -224,6 +232,7 @@ register_memory_routes(
     list_memory_atoms=list_memory_atoms,
     get_memory_atom=get_memory_atom,
     search_memory=search_memory,
+    list_retrieval_events=list_memory_retrieval_events,
 )
 
 

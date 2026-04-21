@@ -1271,7 +1271,65 @@ For Memoflow, the practical rule is:
 
 This separation is necessary if Memoflow is expected to support advanced agents instead of a single narrow workflow.
 
-## 21. Immediate Next Engineering Decisions
+## 21. Model Topology For Memory Processing
+
+All model-driven memory functions in Memoflow should default to a dedicated local sidecar model instead of the active chat model.
+
+Current default decision:
+
+- provider: `ollama`
+- memory sidecar model: `qwen3:30b-a3b`
+
+This model is responsible for:
+
+- memory atom extraction
+- conversation summary updates
+- task state summary updates
+- open issues summary updates
+- future procedural memory extraction
+
+### 21.1 Reason for this default
+
+The chat model and the memory model solve different problems.
+
+- chat model: current reply generation and ReAct execution
+- memory model: semantic compression, state extraction, and durable memory construction
+
+Keeping them separate gives:
+
+- more stable memory behavior
+- lower coupling to chat-model choice
+- easier evaluation and prompt tuning
+- a direct path to later replacement with stronger API models or fine-tuned local models
+
+### 21.2 Engineering rule
+
+For now, all memory tasks that require semantic understanding should use the local sidecar `qwen3:30b-a3b`.
+
+Rules remain only as:
+
+- schema validation
+- dedupe
+- secret filtering
+- scope normalization
+- persistence constraints
+
+This means Memoflow is now explicitly:
+
+- LLM-driven for memory reasoning
+- rule-constrained for memory persistence
+
+### 21.3 Future upgrade path
+
+Later, the sidecar model can be replaced by:
+
+- a stronger online API model
+- a specialized local fine-tuned model
+- a two-stage memory model topology
+
+The architecture must keep the sidecar boundary stable so that model replacement does not require rewriting the memory kernel.
+
+## 22. Immediate Next Engineering Decisions
 
 The next concrete decisions for this repository are:
 
@@ -1283,7 +1341,7 @@ The next concrete decisions for this repository are:
 
 These decisions must be locked before implementation starts.
 
-## 22. Final Position
+## 23. Final Position
 
 Memoflow should be built as a memory kernel, not a convenience wrapper.
 

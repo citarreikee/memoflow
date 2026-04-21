@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import List
 
 from services.memory.harness import MemoryHarness
+from services.memory.reasoner import MemoryReasoner, MemoryReasonerError
 from services.memory.schemas import Episode, ShortTermState, utc_now_iso
 from services.memory.stores import SQLiteMemoryStore
 
 
 class ShortTermContextManager:
-    def __init__(self, store: SQLiteMemoryStore) -> None:
+    def __init__(self, store: SQLiteMemoryStore, reasoner: MemoryReasoner | None = None) -> None:
         self.store = store
+        self.reasoner = reasoner
 
     def load_or_create(self, session_id: str, harness: MemoryHarness) -> ShortTermState:
         state = self.store.get_short_term_state(session_id)
@@ -26,17 +28,48 @@ class ShortTermContextManager:
             compacted_turn_ids = recent_turn_ids[: -harness.recent_turn_limit]
             recent_turn_ids = recent_turn_ids[-harness.recent_turn_limit :]
 
+        reasoner_result = None
+        if self.reasoner:
+            try:
+                # Short-term state is model-driven already: the sidecar reads the
+                # finished episode plus existing summaries and returns updated
+                # conversation/task/open-issue state in one pass.
+                reasoner_result = self.reasoner.reason(
+                    episode=episode,
+                    harness=harness,
+                    existing_conversation_summary=state.conversation_summary,
+                    existing_task_state_summary=state.task_state_summary,
+                    existing_open_issues_summary=state.open_issues_summary,
+                )
+            except MemoryReasonerError:
+                reasoner_result = None
+
         if compacted_turn_ids:
-            state.conversation_summary = self._append_compaction_note(
-                state.conversation_summary,
-                compacted_turn_ids,
-            )
             state.covered_message_ids = sorted(set(state.covered_message_ids + compacted_turn_ids))
+            state.conversation_summary = (
+                reasoner_result.conversation_summary
+                if reasoner_result and reasoner_result.conversation_summary
+                else self._append_compaction_note(state.conversation_summary, compacted_turn_ids)
+            )
+        elif reasoner_result and reasoner_result.conversation_summary:
+            state.conversation_summary = reasoner_result.conversation_summary
 
         state.recent_turn_ids = recent_turn_ids
         state.harness = harness.name
-        state.task_state_summary = self._derive_task_state_hint(episode, state.task_state_summary)
-        state.open_issues_summary = self._derive_open_issue_hint(episode, state.open_issues_summary)
+        state.task_state_summary = (
+            reasoner_result.task_state_summary
+            if reasoner_result
+            and reasoner_result.task_state_summary
+            and reasoner_result.task_state_summary.strip().lower() not in {"empty", "none", "n/a"}
+            else self._derive_task_state_hint(episode, state.task_state_summary)
+        )
+        state.open_issues_summary = (
+            reasoner_result.open_issues_summary
+            if reasoner_result
+            and reasoner_result.open_issues_summary
+            and reasoner_result.open_issues_summary.strip().lower() not in {"empty", "none", "n/a"}
+            else self._derive_open_issue_hint(episode, state.open_issues_summary)
+        )
         state.updated_at = utc_now_iso()
         self.store.save_short_term_state(state)
         return state
@@ -59,6 +92,8 @@ class ShortTermContextManager:
 
     @staticmethod
     def _derive_open_issue_hint(episode: Episode, existing: str) -> str:
+        # Rule fallback still exists here, but only as degradation behavior when
+        # the sidecar model does not return a useful open-issues summary.
         text = f"{episode.user_message}\n{episode.assistant_answer}".lower()
         markers = ("todo", "next", "fix", "error", "failed", "blocked", "issue", "未完成", "下一步", "错误")
         if any(marker in text for marker in markers):

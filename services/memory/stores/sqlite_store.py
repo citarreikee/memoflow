@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from services.memory.schemas import Episode, MemoryAtom, ShortTermState, utc_now_iso
+from services.memory.schemas import Episode, MemoryAtom, RetrievalEvent, ShortTermState
 
 
 class SQLiteMemoryStore:
@@ -238,6 +238,43 @@ class SQLiteMemoryStore:
             row = conn.execute("SELECT * FROM memory_atoms WHERE hash = ?", (memory_hash,)).fetchone()
         return self._atom_row_to_dict(row) if row else None
 
+    def save_retrieval_event(self, event: RetrievalEvent) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO retrieval_events (
+                  id, session_id, query, harness, retrieved_atom_ids_json, scores_json,
+                  assembled_context_preview, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.id,
+                    event.session_id,
+                    event.query,
+                    event.harness,
+                    json.dumps(event.retrieved_atom_ids, ensure_ascii=False),
+                    json.dumps(event.scores, ensure_ascii=False),
+                    event.assembled_context_preview,
+                    event.created_at,
+                ),
+            )
+
+    def list_retrieval_events(self, session_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        limit = max(1, min(limit, 500))
+        with self._connect() as conn:
+            if session_id:
+                rows = conn.execute(
+                    "SELECT * FROM retrieval_events WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (session_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM retrieval_events ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [self._retrieval_event_row_to_dict(row) for row in rows]
+
     def _episode_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         return {
             "id": row["id"],
@@ -272,4 +309,16 @@ class SQLiteMemoryStore:
             "metadata": json.loads(row["metadata_json"] or "{}"),
             "created_at": row["created_at"],
             "observed_at": row["observed_at"],
+        }
+
+    def _retrieval_event_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        return {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "query": row["query"],
+            "harness": row["harness"],
+            "retrieved_atom_ids": json.loads(row["retrieved_atom_ids_json"] or "[]"),
+            "scores": json.loads(row["scores_json"] or "{}"),
+            "assembled_context_preview": row["assembled_context_preview"] or "",
+            "created_at": row["created_at"],
         }

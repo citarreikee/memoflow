@@ -24,6 +24,8 @@ class EpisodeRecorder:
         react_messages: List[Dict[str, Any]],
         metadata: Dict[str, Any],
     ) -> Episode:
+        # Main usable memory path starts here: every completed turn is persisted
+        # as an evidence-backed episode before any later memory extraction or replay.
         now = utc_now_iso()
         episode = Episode(
             id=str(uuid.uuid4()),
@@ -43,6 +45,9 @@ class EpisodeRecorder:
 
     @staticmethod
     def _extract_tool_trace(react_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # The episode stores a compact ReAct trace instead of raw provider output.
+        # This is what later allows memory extraction to be grounded in concrete
+        # tool calls, tool results, and final answer content.
         trace: List[Dict[str, Any]] = []
         for msg in react_messages:
             if msg.get("tool_calls"):

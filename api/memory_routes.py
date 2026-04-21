@@ -13,6 +13,7 @@ def register_memory_routes(
     list_memory_atoms,
     get_memory_atom,
     search_memory,
+    list_retrieval_events,
 ) -> None:
     app.add_api_route("/api/memory/status", memory_status, methods=["GET"])
     app.add_api_route("/api/memory/harnesses", list_harnesses, methods=["GET"])
@@ -23,3 +24,4 @@ def register_memory_routes(
     app.add_api_route("/api/memory/atoms", list_memory_atoms, methods=["GET"])
     app.add_api_route("/api/memory/atoms/{atom_id}", get_memory_atom, methods=["GET"])
     app.add_api_route("/api/memory/search", search_memory, methods=["POST"])
+    app.add_api_route("/api/memory/retrieval-events", list_retrieval_events, methods=["GET"])

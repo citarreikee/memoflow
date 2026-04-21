@@ -43,5 +43,5 @@ async def get_api_info_payload() -> Dict[str, Any]:
         },
         "total_models": len(all_models),
         "models": [model["name"] for model in all_models],
-        "memory_processing": "disabled",
+        "memory_processing": "enabled" if settings.MEMORY_ENABLED else "disabled",
     }

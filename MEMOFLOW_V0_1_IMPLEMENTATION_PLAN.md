@@ -1,6 +1,6 @@
 # Memoflow v0.1 Implementation Plan
 
-Status: Ready for implementation planning  
+Status: In implementation  
 Target repo: `d:\Joestar\jojorn\memoflow`  
 Base system: pure ReAct conversation backend
 
@@ -25,7 +25,7 @@ The current backend intentionally does not provide:
 - memory injection
 - memory inspection
 
-v0.1 adds the first memory layer without disrupting the existing chat path.
+v0.1 is now being implemented on top of the existing chat path.
 
 ## 2. v0.1 Goal
 
@@ -34,8 +34,8 @@ v0.1 should turn the pure conversation backend into a memory-aware backend with:
 1. durable episode storage
 2. structured short-term state
 3. explicit context compaction
-4. ADD-only semantic memory atoms
-5. basic keyword + vector retrieval
+4. model-driven ADD-only semantic memory atoms
+5. basic retrieval with score fusion
 6. context assembly before model invocation
 7. inspectable memory/debug APIs
 
@@ -51,7 +51,7 @@ After v0.1, the system should behave as follows:
 4. Backend assembles a prompt context under token budget.
 5. Model responds through the existing ReAct pipeline.
 6. Backend writes an episode record for the completed turn.
-7. Backend asynchronously extracts memory atoms from the episode.
+7. Backend extracts memory atoms from the episode through the local sidecar model.
 8. Future turns can recall those memory atoms.
 9. Operators can inspect what memory was stored and why it was injected.
 
@@ -131,6 +131,24 @@ Reason:
 
 - v0.1 should avoid destructive memory mutation
 - contradiction handling can be layered later
+- extraction quality should come from a dedicated memory model, not hard-coded keyword rules
+
+### 4.8 Local memory sidecar model
+
+Purpose:
+
+- centralize all memory-reasoning work in a dedicated model path
+
+Adds:
+
+- local Ollama-based `MemoryReasoner`
+- default memory model: `qwen3:30b-a3b`
+- separate memory model configuration from chat model configuration
+
+Reason:
+
+- memory extraction and compression are not the same task as user-facing chat
+- sidecar topology allows later migration to stronger online models or fine-tuned local models
 
 ### 4.5 Basic retrieval
 
@@ -141,9 +159,9 @@ Purpose:
 Adds:
 
 - keyword search
-- vector search
-- simple score fusion
+- type-prioritized score fusion
 - scope filtering
+- retrieval event persistence
 
 Reason:
 
@@ -479,10 +497,11 @@ Deliver:
 Files:
 
 - `services/memory/ingestor.py`
+- `services/memory/reasoner.py`
 
 Deliver:
 
-- rule-assisted LLM extraction prompt
+- sidecar-model extraction prompt
 - ADD-only atoms
 - hash dedupe
 - evidence episode linkage
@@ -495,8 +514,7 @@ Files:
 
 Deliver:
 
-- SQLite FTS search
-- vector interface stub
+- lexical retrieval
 - simple score fusion
 - retrieval event persistence
 
@@ -511,6 +529,13 @@ Deliver:
 - prompt patch generation
 - section budgets
 - assembled context preview
+
+Current status:
+
+- first implementation landed
+- retrieves stored atoms before chat
+- injects assembled memory as a system context block
+- stores retrieval events for inspection
 
 ### Step 8. Add memory APIs
 
@@ -568,12 +593,16 @@ MEMORY_INGEST_ASYNC=true
 MEMORY_COMPACTION_ENABLED=true
 MEMORY_RETRIEVAL_TOP_K=8
 MEMORY_CONTEXT_TOKEN_BUDGET=4000
+MEMORY_MODEL_PROVIDER=ollama
+MEMORY_MODEL_NAME=qwen3:30b-a3b
+MEMORY_MODEL_USE_CHAT_MODEL_AS_FALLBACK=true
 ```
 
-Default should be conservative:
+Current repo default:
 
-- memory disabled until implementation is verified
-- explicit opt-in during development
+- memory enabled in local development
+- sidecar model fixed to local `qwen3:30b-a3b`
+- fallback remains available through config
 
 ## 14. Risks
 
@@ -648,7 +677,7 @@ The key first-stage additions are:
 - persist the conversation as episodes
 - manage short-term context explicitly
 - introduce task-specialized harness configuration
-- extract simple ADD-only long-term memory atoms
+- extract ADD-only long-term memory atoms through a local sidecar model
 - retrieve and inject memory through a controlled assembler
 
 This keeps the implementation grounded while preserving the architecture needed for later SOTA features.

@@ -64,3 +64,18 @@ class MemoryAtom:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class RetrievalEvent:
+    id: str
+    session_id: str
+    query: str
+    harness: str
+    retrieved_atom_ids: List[str]
+    scores: Dict[str, float] = field(default_factory=dict)
+    assembled_context_preview: str = ""
+    created_at: str = field(default_factory=utc_now_iso)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)

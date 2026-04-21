@@ -20,6 +20,8 @@ class ChatTurnContext:
     messages: List[Dict[str, Any]] = field(default_factory=list)
     token_budget: int = 0
     estimated_tokens: int = 0
+    memory_preview: str = ""
+    retrieval_event_id: Optional[str] = None
 
 
 def get_provider_for_model(model_name: str) -> str:
@@ -98,6 +100,30 @@ def prepare_chat_turn(
 
     history_messages = session_manager.get_history(session_id=session.session_id, limit=None) or []
     messages, token_budget, estimated_tokens = _build_context_messages(history_messages, provider=provider)
+
+    memory_preview = ""
+    retrieval_event_id: Optional[str] = None
+    if memory_runtime.enabled and memory_runtime.retriever and memory_runtime.assembler:
+        # This is the live read path for memory-aware chat:
+        # 1. retrieve relevant short-term + long-term memory for the new query
+        # 2. assemble it into a bounded prompt-side context block
+        # 3. inject that block before normal history messages
+        # 4. persist a retrieval event so the injection can be inspected later
+        bundle = memory_runtime.retriever.retrieve(
+            session_id=session.session_id,
+            session_key=session_key,
+            query=user_message,
+            harness=harness,
+        )
+        assembled = memory_runtime.assembler.assemble(bundle)
+        if assembled.injected_messages:
+            pinned_count = len(_build_pinned_prompt_messages())
+            messages = messages[:pinned_count] + assembled.injected_messages + messages[pinned_count:]
+            estimated_tokens = _estimate_messages_tokens(messages)
+        memory_preview = assembled.preview
+        event = memory_runtime.retriever.save_event(bundle, assembled.preview)
+        retrieval_event_id = event.id
+
     return ChatTurnContext(
         provider=provider,
         session_id=session.session_id,
@@ -108,6 +134,8 @@ def prepare_chat_turn(
         messages=messages,
         token_budget=token_budget,
         estimated_tokens=estimated_tokens,
+        memory_preview=memory_preview,
+        retrieval_event_id=retrieval_event_id,
     )
 
 
@@ -306,6 +334,10 @@ async def stream_chat_with_session(
     episode_id: Optional[str] = None
     written_memory_atoms: List[str] = []
     if memory_runtime.enabled and memory_runtime.episodes and memory_runtime.short_term:
+        # This is the live write path for memory-aware chat:
+        # 1. persist the finished turn as an episode
+        # 2. update structured short-term state through the sidecar model
+        # 3. ingest durable long-term atoms from the same episode
         episode = memory_runtime.episodes.record_completed_turn(
             session_id=context.session_id,
             session_key=context.session_key,
@@ -338,5 +370,7 @@ async def stream_chat_with_session(
             "memory_harness": context.harness.name,
             "episode_id": episode_id,
             "memory_atom_ids": written_memory_atoms,
+            "retrieval_event_id": context.retrieval_event_id,
+            "memory_context_preview": context.memory_preview,
         }
     )

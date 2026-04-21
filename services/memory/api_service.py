@@ -82,6 +82,11 @@ def list_harnesses_payload() -> Dict[str, Any]:
     return {"harnesses": list_harness_payload()}
 
 
+def list_retrieval_events_payload(session_id: Optional[str] = None, limit: int = 50) -> Dict[str, Any]:
+    store = _require_store()
+    return {"retrieval_events": store.list_retrieval_events(session_id=session_id, limit=limit)}
+
+
 def _require_store():
     if not memory_runtime.enabled or not memory_runtime.store:
         raise RuntimeError("Memory subsystem is disabled")

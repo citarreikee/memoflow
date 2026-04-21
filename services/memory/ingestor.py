@@ -6,22 +6,23 @@ import uuid
 from typing import List
 
 from services.memory.harness import MemoryHarness
+from services.memory.reasoner import MemoryReasoner, MemoryReasonerError
 from services.memory.schemas import Episode, MemoryAtom, utc_now_iso
 from services.memory.stores import SQLiteMemoryStore
 
 
 class MemoryIngestor:
-    """Conservative ADD-only ingestor for v0.1.
+    """LLM-driven ADD-only ingestor constrained by schema and dedupe."""
 
-    This is intentionally rule-gated. It writes only evidence-backed atoms when
-    the turn contains explicit memory-worthy signals.
-    """
-
-    def __init__(self, store: SQLiteMemoryStore) -> None:
+    def __init__(self, store: SQLiteMemoryStore, reasoner: MemoryReasoner | None = None) -> None:
         self.store = store
+        self.reasoner = reasoner
 
     def ingest_episode(self, episode: Episode, harness: MemoryHarness) -> List[MemoryAtom]:
-        candidates = self._extract_candidates(episode, harness)
+        # Ingestion is already model-driven: we ask the sidecar to emit typed
+        # candidate atoms, then keep persistence-time rules only for safety.
+        state = self.store.get_short_term_state(episode.session_id)
+        candidates = self._extract_candidates(episode, harness, state=state)
         written: List[MemoryAtom] = []
         for atom in candidates:
             if self.store.get_memory_atom_by_hash(atom.hash):
@@ -30,108 +31,92 @@ class MemoryIngestor:
             written.append(atom)
         return written
 
-    def _extract_candidates(self, episode: Episode, harness: MemoryHarness) -> List[MemoryAtom]:
-        text = f"{episode.user_message}\n{episode.assistant_answer}".strip()
-        if not self._is_memory_worthy(text):
+    def _extract_candidates(self, episode: Episode, harness: MemoryHarness, state=None) -> List[MemoryAtom]:
+        if not self.reasoner:
             return []
-
-        atom_type = self._classify(text)
-        if atom_type not in harness.memory_types and atom_type != "semantic":
-            atom_type = "semantic"
-
-        content = self._normalize_content(text)
-        if not content:
-            return []
-
-        memory_hash = self._hash(episode.session_key, atom_type, content)
-        now = utc_now_iso()
-        return [
-            MemoryAtom(
-                id=str(uuid.uuid4()),
-                type=atom_type,
-                scope_type="project",
-                scope_id=episode.session_key or "main",
-                content=content,
-                normalized_content=content.lower(),
-                evidence_episode_ids=[episode.id],
-                entities=self._extract_entities(text),
-                keywords=self._extract_keywords(text),
-                confidence=0.65,
-                importance=0.6 if atom_type != "warning" else 0.8,
-                status="active",
-                hash=memory_hash,
-                metadata={"harness": harness.name, "source": episode.source},
-                created_at=now,
-                observed_at=episode.completed_at,
+        try:
+            result = self.reasoner.reason(
+                episode=episode,
+                harness=harness,
+                existing_conversation_summary=state.conversation_summary if state else "",
+                existing_task_state_summary=state.task_state_summary if state else "",
+                existing_open_issues_summary=state.open_issues_summary if state else "",
             )
-        ]
+        except MemoryReasonerError:
+            return []
 
-    @staticmethod
-    def _is_memory_worthy(text: str) -> bool:
-        lowered = text.lower()
-        markers = (
-            "remember",
-            "记住",
-            "决定",
-            "约定",
-            "规则",
-            "不要",
-            "必须",
-            "路径",
-            "workdir",
-            "working directory",
-            "error",
-            "failed",
-            "失败",
-            "错误",
-            "blocked",
-            "已完成",
-            "implemented",
-        )
-        return any(marker in lowered for marker in markers)
+        candidates: List[MemoryAtom] = []
+        for raw_atom in result.memory_atoms:
+            atom_type = str(raw_atom.get("type") or "semantic").strip().lower() or "semantic"
+            if atom_type not in {"semantic", "project_state", "preference", "warning", "procedural"}:
+                atom_type = "semantic"
+            if atom_type not in harness.memory_types and atom_type != "semantic":
+                atom_type = "semantic"
 
-    @staticmethod
-    def _classify(text: str) -> str:
-        lowered = text.lower()
-        if any(marker in lowered for marker in ("error", "failed", "失败", "错误", "blocked", "不要")):
-            return "warning"
-        if any(marker in lowered for marker in ("how to", "步骤", "流程", "procedure", "workflow")):
-            return "procedural"
-        if any(marker in lowered for marker in ("path", "路径", "workdir", "已完成", "implemented", "决定")):
-            return "project_state"
-        if any(marker in lowered for marker in ("prefer", "偏好", "习惯")):
-            return "preference"
-        return "semantic"
+            content = str(raw_atom.get("content") or "").strip()
+            if not content:
+                continue
+            if len(content) > 700:
+                content = content[:700] + "..."
+            if self._looks_dirty(content):
+                continue
 
-    @staticmethod
-    def _normalize_content(text: str) -> str:
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        content = " ".join(lines)
-        content = re.sub(r"\s+", " ", content).strip()
-        if len(content) > 700:
-            content = content[:700] + "..."
-        return content
-
-    @staticmethod
-    def _extract_entities(text: str) -> List[str]:
-        entities = set(re.findall(r"[A-Za-z]:\\[^\s`]+|`([^`]+)`", text))
-        flattened = set()
-        for item in entities:
-            if isinstance(item, tuple):
-                flattened.update(part for part in item if part)
-            elif item:
-                flattened.add(item)
-        return sorted(flattened)[:12]
-
-    @staticmethod
-    def _extract_keywords(text: str) -> List[str]:
-        keywords = set()
-        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,}", text):
-            if len(token) <= 40:
-                keywords.add(token.lower())
-        return sorted(keywords)[:30]
+            memory_hash = self._hash(episode.session_key, atom_type, content)
+            now = utc_now_iso()
+            candidates.append(
+                MemoryAtom(
+                    id=str(uuid.uuid4()),
+                    type=atom_type,
+                    scope_type="project",
+                    scope_id=episode.session_key or "main",
+                    content=content,
+                    normalized_content=content.lower(),
+                    evidence_episode_ids=[episode.id],
+                    entities=[str(item) for item in (raw_atom.get("entities") or [])][:12],
+                    keywords=[str(item).lower() for item in (raw_atom.get("keywords") or [])][:30],
+                    confidence=max(0.0, min(1.0, float(raw_atom.get("confidence") or 0.5))),
+                    importance=max(0.0, min(1.0, float(raw_atom.get("importance") or 0.5))),
+                    status="active",
+                    hash=memory_hash,
+                    metadata={
+                        "harness": harness.name,
+                        "source": episode.source,
+                        "reasoner_model": self.reasoner.model,
+                    },
+                    created_at=now,
+                    observed_at=episode.completed_at,
+                )
+            )
+        return candidates
 
     @staticmethod
     def _hash(scope_id: str, atom_type: str, content: str) -> str:
         raw = f"{scope_id}|{atom_type}|{content.lower()}".encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
+
+    @staticmethod
+    def _looks_dirty(content: str) -> bool:
+        # Persistence is deliberately stricter than model extraction so bad local
+        # outputs do not permanently pollute the memory store.
+        normalized = content.strip()
+        if not normalized:
+            return True
+        lowered = normalized.lower()
+        if lowered in {"empty", "none", "n/a", "unknown"}:
+            return True
+        if "\ufffd" in normalized:
+            return True
+
+        question_marks = normalized.count("?")
+        if question_marks >= 6 and question_marks / max(1, len(normalized)) > 0.08:
+            return True
+
+        letters_or_cjk = re.findall(r"[A-Za-z\u4e00-\u9fff0-9]", normalized)
+        if not letters_or_cjk:
+            return True
+
+        suspicious_tokens = ("???", "锟", "�")
+        if any(token in normalized for token in suspicious_tokens):
+            return True
+
+        return False

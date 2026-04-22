@@ -27,7 +27,7 @@ class Settings:
 
         self.API_TITLE: str = "Memoflow Conversation API"
         self.API_VERSION: str = "0.1.0"
-        self.API_DESCRIPTION: str = "Multi-provider ReAct conversation backend with Memoflow v0.1 memory processing."
+        self.API_DESCRIPTION: str = "Multi-provider ReAct conversation backend."
 
         self.SYSTEM_PROMPT: str = os.getenv("SYSTEM_PROMPT", "").strip()
         self.DEVELOPER_PROMPT: str = os.getenv("DEVELOPER_PROMPT", "").strip()
@@ -46,28 +46,6 @@ class Settings:
         self.DEEPSEEK_CONTEXT_WINDOW: int = int(os.getenv("DEEPSEEK_CONTEXT_WINDOW", "128000"))
         self.KIMI_CONTEXT_WINDOW: int = int(os.getenv("KIMI_CONTEXT_WINDOW", "256000"))
         self.OLLAMA_CONTEXT_WINDOW: int = int(os.getenv("OLLAMA_CONTEXT_WINDOW", "32768"))
-
-        self.MEMORY_ENABLED: bool = os.getenv("MEMORY_ENABLED", "true").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        self.MEMORY_DB_PATH: str = os.getenv("MEMORY_DB_PATH", "./data/memoflow_memory.sqlite3")
-        self.MEMORY_DEFAULT_HARNESS: str = os.getenv("MEMORY_DEFAULT_HARNESS", "coding").strip() or "coding"
-        self.MEMORY_COMPACTION_ENABLED: bool = os.getenv("MEMORY_COMPACTION_ENABLED", "true").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        self.MEMORY_RETRIEVAL_TOP_K: int = int(os.getenv("MEMORY_RETRIEVAL_TOP_K", "8"))
-        self.MEMORY_CONTEXT_TOKEN_BUDGET: int = int(os.getenv("MEMORY_CONTEXT_TOKEN_BUDGET", "4000"))
-        self.MEMORY_MODEL_PROVIDER: str = os.getenv("MEMORY_MODEL_PROVIDER", "ollama").strip() or "ollama"
-        self.MEMORY_MODEL_NAME: str = os.getenv("MEMORY_MODEL_NAME", "qwen3:30b-a3b").strip() or "qwen3:30b-a3b"
-        self.MEMORY_MODEL_USE_CHAT_MODEL_AS_FALLBACK: bool = (
-            os.getenv("MEMORY_MODEL_USE_CHAT_MODEL_AS_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}
-        )
 
 
 settings = Settings()

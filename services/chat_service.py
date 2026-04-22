@@ -5,8 +5,6 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from config import settings
-from services.memory.harness import MemoryHarness, get_harness
-from services.memory.runtime import memory_runtime
 
 
 @dataclass
@@ -16,12 +14,9 @@ class ChatTurnContext:
     session_key: str
     user_message: str
     input_source: str
-    harness: MemoryHarness
     messages: List[Dict[str, Any]] = field(default_factory=list)
     token_budget: int = 0
     estimated_tokens: int = 0
-    memory_preview: str = ""
-    retrieval_event_id: Optional[str] = None
 
 
 def get_provider_for_model(model_name: str) -> str:
@@ -62,12 +57,10 @@ def prepare_chat_turn(
     request_session_id: Optional[str],
     request_session_key: Optional[str] = None,
     input_source: Optional[str] = None,
-    request_harness: Optional[str] = None,
 ) -> ChatTurnContext:
     provider = get_provider_for_model(model)
     session_key = (request_session_key or "main").strip() or "main"
     source = (input_source or "web").strip() or "web"
-    harness = get_harness(request_harness or settings.MEMORY_DEFAULT_HARNESS)
 
     session = None
     if request_session_id:
@@ -84,8 +77,7 @@ def prepare_chat_turn(
             metadata={
                 "provider": provider,
                 "session_key": session_key,
-                "memory_processing": "enabled" if memory_runtime.enabled else "disabled",
-                "memory_harness": harness.name,
+                "input_source": source,
             },
         )
 
@@ -93,49 +85,21 @@ def prepare_chat_turn(
         session.model = model
     session.metadata["provider"] = provider
     session.metadata["session_key"] = session_key
-    session.metadata["memory_processing"] = "enabled" if memory_runtime.enabled else "disabled"
-    session.metadata["memory_harness"] = harness.name
+    session.metadata["input_source"] = source
     session_manager.bind_session_key(session_key, session.session_id)
     session_manager.add_message(session_id=session.session_id, role="user", content=user_message)
 
     history_messages = session_manager.get_history(session_id=session.session_id, limit=None) or []
     messages, token_budget, estimated_tokens = _build_context_messages(history_messages, provider=provider)
-
-    memory_preview = ""
-    retrieval_event_id: Optional[str] = None
-    if memory_runtime.enabled and memory_runtime.retriever and memory_runtime.assembler:
-        # This is the live read path for memory-aware chat:
-        # 1. retrieve relevant short-term + long-term memory for the new query
-        # 2. assemble it into a bounded prompt-side context block
-        # 3. inject that block before normal history messages
-        # 4. persist a retrieval event so the injection can be inspected later
-        bundle = memory_runtime.retriever.retrieve(
-            session_id=session.session_id,
-            session_key=session_key,
-            query=user_message,
-            harness=harness,
-        )
-        assembled = memory_runtime.assembler.assemble(bundle)
-        if assembled.injected_messages:
-            pinned_count = len(_build_pinned_prompt_messages())
-            messages = messages[:pinned_count] + assembled.injected_messages + messages[pinned_count:]
-            estimated_tokens = _estimate_messages_tokens(messages)
-        memory_preview = assembled.preview
-        event = memory_runtime.retriever.save_event(bundle, assembled.preview)
-        retrieval_event_id = event.id
-
     return ChatTurnContext(
         provider=provider,
         session_id=session.session_id,
         session_key=session_key,
         user_message=user_message,
         input_source=source,
-        harness=harness,
         messages=messages,
         token_budget=token_budget,
         estimated_tokens=estimated_tokens,
-        memory_preview=memory_preview,
-        retrieval_event_id=retrieval_event_id,
     )
 
 
@@ -268,9 +232,6 @@ async def stream_chat_with_session(
     done_data_pending: Optional[Dict[str, str]] = None
     saved_from_react = False
     seq = 0
-    final_answer = ""
-    final_thinking = ""
-    final_react_messages: List[Dict[str, Any]] = []
 
     def _to_sse(payload: Dict[str, Any]) -> str:
         nonlocal seq
@@ -298,14 +259,11 @@ async def stream_chat_with_session(
                 "answer": data.get("answer") or data.get("content") or "",
                 "thinking": data.get("thinking", ""),
             }
-            final_answer = done_data_pending["answer"]
-            final_thinking = done_data_pending["thinking"]
             continue
         if event_type != "react_complete":
             continue
 
         react_messages = data.get("messages", [])
-        final_react_messages = react_messages
         for msg in react_messages:
             session_manager.add_message(
                 session_id=context.session_id,
@@ -331,34 +289,6 @@ async def stream_chat_with_session(
             metadata={"provider": context.provider, "session_key": context.session_key},
         )
 
-    episode_id: Optional[str] = None
-    written_memory_atoms: List[str] = []
-    if memory_runtime.enabled and memory_runtime.episodes and memory_runtime.short_term:
-        # This is the live write path for memory-aware chat:
-        # 1. persist the finished turn as an episode
-        # 2. update structured short-term state through the sidecar model
-        # 3. ingest durable long-term atoms from the same episode
-        episode = memory_runtime.episodes.record_completed_turn(
-            session_id=context.session_id,
-            session_key=context.session_key,
-            harness=context.harness,
-            source=context.input_source,
-            user_message=context.user_message,
-            assistant_answer=final_answer,
-            react_messages=final_react_messages,
-            metadata={
-                "provider": context.provider,
-                "model": model,
-                "enable_tools": enable_tools,
-                "force_tool_use": force_tool_use,
-                "thinking": final_thinking,
-            },
-        )
-        memory_runtime.short_term.update_after_episode(episode, context.harness)
-        if memory_runtime.ingestor:
-            written_memory_atoms = [atom.id for atom in memory_runtime.ingestor.ingest_episode(episode, context.harness)]
-        episode_id = episode.id
-
     yield _to_sse(
         {
             "type": "session_id",
@@ -366,11 +296,5 @@ async def stream_chat_with_session(
             "session_key": context.session_key,
             "token_budget": context.token_budget,
             "estimated_tokens": context.estimated_tokens,
-            "memory_processing": "enabled" if memory_runtime.enabled else "disabled",
-            "memory_harness": context.harness.name,
-            "episode_id": episode_id,
-            "memory_atom_ids": written_memory_atoms,
-            "retrieval_event_id": context.retrieval_event_id,
-            "memory_context_preview": context.memory_preview,
         }
     )

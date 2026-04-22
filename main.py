@@ -6,8 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from api.chat_routes import register_chat_routes
-from api.memory_routes import register_memory_routes
-from api.schemas import ChatRequest, MemorySearchRequest, SessionCreateRequest
+from api.schemas import ChatRequest, SessionCreateRequest
 from api.system_routes import register_system_routes
 from chat_history import session_manager
 from config import settings
@@ -21,18 +20,6 @@ from services.chat_service import (
     stream_chat_with_session,
 )
 from services.model_catalog import ModelCatalogState, get_models_response
-from services.memory.api_service import (
-    get_episode_payload,
-    get_memory_atom_payload,
-    get_short_term_state_payload,
-    list_episodes_payload,
-    list_harnesses_payload,
-    list_memory_atoms_payload,
-    list_retrieval_events_payload,
-    list_short_term_states_payload,
-    memory_status_payload,
-    search_memory_payload,
-)
 from services.system_service import get_api_info_payload, get_health_payload, get_tools_payload
 
 
@@ -76,7 +63,6 @@ async def root() -> Dict[str, str]:
         "status": "running",
         "version": settings.API_VERSION,
         "docs": "/docs",
-        "memory_processing": "enabled" if settings.MEMORY_ENABLED else "disabled",
     }
 
 
@@ -117,7 +103,6 @@ async def chat_stream(request: ChatRequest):
             request_session_id=request.sessionId,
             request_session_key=request.sessionKey,
             input_source=request.inputSource,
-            request_harness=request.memoryHarness,
         )
         return StreamingResponse(
             stream_chat_with_session(
@@ -151,60 +136,6 @@ async def api_info():
     return await _run_with_500(get_api_info_payload, "Failed to get info")
 
 
-async def memory_status():
-    return memory_status_payload()
-
-
-async def list_memory_harnesses():
-    return list_harnesses_payload()
-
-
-async def list_memory_episodes(session_id: str | None = None, limit: int = 50):
-    return await _run_with_500(lambda: list_episodes_payload(session_id=session_id, limit=limit), "Failed to list episodes")
-
-
-async def get_memory_episode(episode_id: str):
-    return await _run_with_404(lambda: get_episode_payload(episode_id), "Episode not found")
-
-
-async def get_memory_short_term_state(session_id: str):
-    return await _run_with_404(lambda: get_short_term_state_payload(session_id), "Short-term state not found")
-
-
-async def list_memory_short_term_states(limit: int = 50):
-    return await _run_with_500(lambda: list_short_term_states_payload(limit=limit), "Failed to list short-term states")
-
-
-async def list_memory_atoms(scope_type: str | None = None, scope_id: str | None = None, limit: int = 50):
-    return await _run_with_500(
-        lambda: list_memory_atoms_payload(scope_type=scope_type, scope_id=scope_id, limit=limit),
-        "Failed to list memory atoms",
-    )
-
-
-async def get_memory_atom(atom_id: str):
-    return await _run_with_404(lambda: get_memory_atom_payload(atom_id), "Memory atom not found")
-
-
-async def search_memory(request: MemorySearchRequest):
-    return await _run_with_500(
-        lambda: search_memory_payload(
-            query=request.query,
-            scope_type=request.scope_type,
-            scope_id=request.scope_id,
-            limit=request.limit,
-        ),
-        "Failed to search memory",
-    )
-
-
-async def list_memory_retrieval_events(session_id: str | None = None, limit: int = 50):
-    return await _run_with_500(
-        lambda: list_retrieval_events_payload(session_id=session_id, limit=limit),
-        "Failed to list retrieval events",
-    )
-
-
 register_system_routes(
     app,
     root=root,
@@ -220,19 +151,6 @@ register_chat_routes(
     get_session=get_session,
     delete_session=delete_session,
     chat_stream=chat_stream,
-)
-register_memory_routes(
-    app,
-    memory_status=memory_status,
-    list_harnesses=list_memory_harnesses,
-    list_episodes=list_memory_episodes,
-    get_episode=get_memory_episode,
-    get_short_term_state=get_memory_short_term_state,
-    list_short_term_states=list_memory_short_term_states,
-    list_memory_atoms=list_memory_atoms,
-    get_memory_atom=get_memory_atom,
-    search_memory=search_memory,
-    list_retrieval_events=list_memory_retrieval_events,
 )
 
 

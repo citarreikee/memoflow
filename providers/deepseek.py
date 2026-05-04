@@ -98,6 +98,23 @@ async def stream_deepseek_response(model: str, messages: list) -> AsyncGenerator
         yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
 
 
+async def generate_deepseek_completion(model: str, messages: list, *, timeout: float = 120.0) -> str:
+    payload = {"model": model, "messages": _format_messages(messages), "stream": False}
+    async with _create_async_client(timeout=timeout) as client:
+        response = await client.post(DEEPSEEK_URL, json=payload, headers=_build_headers())
+        if response.status_code >= 400:
+            raise RuntimeError(format_http_error("DeepSeek request failed", response.status_code, response.text))
+        data = response.json()
+    choice = _pick_primary_choice(data)
+    if not choice:
+        raise RuntimeError("DeepSeek completion returned no choices.")
+    message = choice.get("message", {}) or {}
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise RuntimeError("DeepSeek completion returned no text content.")
+    return content
+
+
 async def get_deepseek_models() -> list[Dict[str, Any]]:
     return [
         {"name": "deepseek-chat", "id": "deepseek-chat", "size": "API", "modified": "", "provider": "deepseek"},

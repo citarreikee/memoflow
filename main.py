@@ -37,6 +37,15 @@ app.add_middleware(
 model_catalog_state = ModelCatalogState()
 
 
+@app.on_event("startup")
+async def load_persisted_sessions() -> None:
+    session_manager._sessions.clear()
+    session_manager._session_key_map.clear()
+    from services.memory.session_store import session_store
+
+    session_store.load_sessions_into(session_manager)
+
+
 async def _maybe_await(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
@@ -96,7 +105,7 @@ async def delete_session(session_id: str):
 
 async def chat_stream(request: ChatRequest):
     try:
-        context = prepare_chat_turn(
+        context = await prepare_chat_turn(
             session_manager,
             model=request.model,
             user_message=request.message,

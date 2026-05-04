@@ -1,7 +1,7 @@
 """Ollama chat provider adapter."""
 
 import json
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, Optional
 
 import httpx
 
@@ -70,6 +70,32 @@ async def stream_ollama_response(model: str, messages: list) -> AsyncGenerator[s
             message = f"Failed to connect to Ollama: {message}"
         err = state.error_event(message) if not state.terminated else {"type": "error", "message": message}
         yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+
+
+async def generate_ollama_completion(
+    model: str,
+    messages: list,
+    *,
+    timeout: float = 120.0,
+    num_predict: Optional[int] = None,
+    think: Optional[bool] = None,
+) -> str:
+    payload: Dict[str, Any] = {"model": model, "messages": _format_messages(messages), "stream": False}
+    if num_predict is not None and num_predict > 0:
+        payload["options"] = {"num_predict": num_predict}
+    if think is not None:
+        payload["think"] = think
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(f"{settings.OLLAMA_API_BASE}/api/chat", json=payload)
+        if response.status_code >= 400:
+            body = response.text
+            raise RuntimeError(format_http_error("Ollama request failed", response.status_code, body))
+        data = response.json()
+        message = data.get("message", {}) if isinstance(data, dict) else {}
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise RuntimeError("Ollama completion returned no text content.")
+        return content
 
 
 async def get_ollama_models() -> list[Dict[str, Any]]:

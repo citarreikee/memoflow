@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class Message:
     role: str
+    message_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     content: Optional[str] = None
     thinking: Optional[str] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
@@ -94,6 +95,30 @@ class SessionManager:
     def create_session(self, model: str, metadata: Optional[Dict[str, Any]] = None) -> Session:
         session = Session(session_id=str(uuid.uuid4()), model=model, metadata=metadata or {})
         self._sessions[session.session_id] = session
+        return session
+
+    def restore_session(
+        self,
+        *,
+        session_id: str,
+        model: str,
+        created_at: str,
+        updated_at: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        messages: Optional[List[Message]] = None,
+    ) -> Session:
+        session = Session(
+            session_id=session_id,
+            model=model,
+            messages=list(messages or []),
+            created_at=created_at,
+            updated_at=updated_at,
+            metadata=metadata or {},
+        )
+        self._sessions[session_id] = session
+        session_key = self._normalize_session_key(session.metadata.get("session_key"))
+        if session_key:
+            self._session_key_map[session_key] = session_id
         return session
 
     def get_session(self, session_id: str) -> Optional[Session]:

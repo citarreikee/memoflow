@@ -149,6 +149,23 @@ async def stream_kimi_response(model: str, messages: list) -> AsyncGenerator[str
         yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
 
 
+async def generate_kimi_completion(model: str, messages: list, *, timeout: float = 120.0) -> str:
+    payload = {"model": model, "messages": _format_messages(messages), "stream": False}
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(KIMI_URL, json=payload, headers=_build_headers())
+        if response.status_code >= 400:
+            raise RuntimeError(format_http_error("Kimi request failed", response.status_code, response.text))
+        data = response.json()
+    choice = _pick_primary_choice(data)
+    if not choice:
+        raise RuntimeError("Kimi completion returned no choices.")
+    message = choice.get("message", {}) or {}
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise RuntimeError("Kimi completion returned no text content.")
+    return content
+
+
 async def get_kimi_models() -> list[Dict[str, Any]]:
     raw_models = [m.strip() for m in settings.KIMI_MODELS.split(",") if m.strip()] if settings.KIMI_MODELS else ["kimi-k2.5"]
     return [

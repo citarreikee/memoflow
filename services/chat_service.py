@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from config import settings
+from services.memory.checkpoints import get_latest_checkpoint
+from services.memory.runtime import RuntimeInput, memory_runtime
+from services.memory.session_store import session_store
+from services.memory.transcript_store import persist_session_message
 
 
 @dataclass
@@ -14,9 +19,14 @@ class ChatTurnContext:
     session_key: str
     user_message: str
     input_source: str
+    workspace_dir: str
     messages: List[Dict[str, Any]] = field(default_factory=list)
     token_budget: int = 0
     estimated_tokens: int = 0
+    file_memories: List[Dict[str, str]] = field(default_factory=list)
+    pending_checkpoint: Optional[Dict[str, Any]] = None
+    memory_debug: Dict[str, Any] = field(default_factory=dict)
+    finalized: bool = False
 
 
 def get_provider_for_model(model_name: str) -> str:
@@ -29,6 +39,8 @@ def get_provider_for_model(model_name: str) -> str:
 
 def create_session_payload(session_manager: Any, model: str, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     session = session_manager.create_session(model=model, metadata=metadata)
+    session.metadata["workspace_dir"] = session.metadata.get("workspace_dir") or os.getcwd()
+    session_store.upsert_session(session)
     return {"session_id": session.session_id, "model": session.model, "created_at": session.created_at}
 
 
@@ -46,10 +58,11 @@ def get_session_payload(session_manager: Any, session_id: str) -> Dict[str, Any]
 def delete_session_payload(session_manager: Any, session_id: str) -> Dict[str, Any]:
     if not session_manager.delete_session(session_id):
         raise KeyError("Session not found")
+    session_store.delete_session(session_id)
     return {"message": "Session deleted"}
 
 
-def prepare_chat_turn(
+async def prepare_chat_turn(
     session_manager: Any,
     *,
     model: str,
@@ -78,6 +91,7 @@ def prepare_chat_turn(
                 "provider": provider,
                 "session_key": session_key,
                 "input_source": source,
+                "workspace_dir": os.getcwd(),
             },
         )
 
@@ -87,19 +101,47 @@ def prepare_chat_turn(
     session.metadata["session_key"] = session_key
     session.metadata["input_source"] = source
     session_manager.bind_session_key(session_key, session.session_id)
-    session_manager.add_message(session_id=session.session_id, role="user", content=user_message)
+    session.metadata["workspace_dir"] = session.metadata.get("workspace_dir") or os.getcwd()
+    session_store.upsert_session(session)
+    user_message_obj = session_manager.add_message(session_id=session.session_id, role="user", content=user_message)
+    if user_message_obj:
+        persist_session_message(session_store, session, user_message_obj)
 
     history_messages = session_manager.get_history(session_id=session.session_id, limit=None) or []
-    messages, token_budget, estimated_tokens = _build_context_messages(history_messages, provider=provider)
+    token_budget = _resolve_token_budget(provider)
+    existing_checkpoint = get_latest_checkpoint(session_store, session.session_id)
+    context_package = await memory_runtime.prepare_turn(
+        RuntimeInput(
+            session_id=session.session_id,
+            session_key=session_key,
+            model=model,
+            provider=provider,
+            input_source=source,
+            user_message=user_message,
+            workspace_dir=session.metadata.get("workspace_dir") or os.getcwd(),
+            history_messages=history_messages,
+            latest_checkpoint=existing_checkpoint,
+            token_budget=token_budget,
+        )
+    )
+    messages = context_package.messages
+    estimated_tokens = context_package.estimated_tokens
+    pending_checkpoint = context_package.pending_checkpoint
+    file_memories = context_package.file_memories
+    memory_debug = context_package.debug
     return ChatTurnContext(
         provider=provider,
         session_id=session.session_id,
         session_key=session_key,
         user_message=user_message,
         input_source=source,
+        workspace_dir=session.metadata.get("workspace_dir") or os.getcwd(),
         messages=messages,
         token_budget=token_budget,
         estimated_tokens=estimated_tokens,
+        file_memories=file_memories,
+        pending_checkpoint=pending_checkpoint,
+        memory_debug=memory_debug,
     )
 
 
@@ -111,24 +153,6 @@ def _parse_sse_data_event(event: str) -> Optional[Dict[str, Any]]:
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
-
-
-def _estimate_text_tokens(value: Any) -> int:
-    text = "" if value is None else str(value)
-    return 0 if not text else max(1, (len(text) + 3) // 4)
-
-
-def _estimate_message_tokens(message: Dict[str, Any]) -> int:
-    token_cost = 4 + _estimate_text_tokens(message.get("role"))
-    for key in ("content", "name", "tool_call_id", "reasoning_content"):
-        token_cost += _estimate_text_tokens(message.get(key))
-    if message.get("tool_calls"):
-        token_cost += _estimate_text_tokens(json.dumps(message["tool_calls"], ensure_ascii=False))
-    return token_cost
-
-
-def _estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
-    return sum(_estimate_message_tokens(message) for message in messages)
 
 
 def _context_window_for_provider(provider: str) -> int:
@@ -145,79 +169,6 @@ def _resolve_token_budget(provider: str) -> int:
         return min(window, settings.CONTEXT_TOKEN_BUDGET)
     ratio = settings.CONTEXT_BUDGET_RATIO if settings.CONTEXT_BUDGET_RATIO > 0 else 0.75
     return max(1024, int(window * ratio))
-
-
-def _build_pinned_prompt_messages() -> List[Dict[str, Any]]:
-    pinned: List[Dict[str, Any]] = []
-    if settings.SYSTEM_PROMPT:
-        pinned.append({"role": "system", "content": settings.SYSTEM_PROMPT})
-    if settings.DEVELOPER_PROMPT:
-        pinned.append({"role": "developer", "content": settings.DEVELOPER_PROMPT})
-    return pinned
-
-
-def _history_message_to_dict(message: Any) -> Dict[str, Any]:
-    if hasattr(message, "to_provider_message"):
-        return message.to_provider_message()
-    return {"role": getattr(message, "role", ""), "content": getattr(message, "content", None)}
-
-
-def _group_messages_by_user_turn(messages: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-    turns: List[List[Dict[str, Any]]] = []
-    current_turn: List[Dict[str, Any]] = []
-    for message in messages:
-        if message.get("role") == "user":
-            if current_turn:
-                turns.append(current_turn)
-            current_turn = [message]
-        else:
-            current_turn.append(message)
-    if current_turn:
-        turns.append(current_turn)
-    return turns
-
-
-def _flatten_turns(turns: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    flat: List[Dict[str, Any]] = []
-    for turn in turns:
-        flat.extend(turn)
-    return flat
-
-
-def _trim_tool_message_content(messages: List[Dict[str, Any]], max_chars: int) -> List[Dict[str, Any]]:
-    if max_chars <= 0:
-        return messages
-    trimmed = []
-    for message in messages:
-        cloned = dict(message)
-        if cloned.get("role") == "tool":
-            content = cloned.get("content")
-            if isinstance(content, str) and len(content) > max_chars:
-                cloned["content"] = content[:max_chars] + "...[truncated]"
-        trimmed.append(cloned)
-    return trimmed
-
-
-def _build_context_messages(history_messages: List[Any], *, provider: str) -> tuple[List[Dict[str, Any]], int, int]:
-    pinned = _build_pinned_prompt_messages()
-    history = [_history_message_to_dict(message) for message in history_messages]
-    history = _trim_tool_message_content(history, settings.CONTEXT_TOOL_RESULT_MAX_CHARS)
-    token_budget = _resolve_token_budget(provider)
-
-    context_history = history
-    if _estimate_messages_tokens(pinned + context_history) > token_budget:
-        turns = _group_messages_by_user_turn(context_history)
-        context_history = _flatten_turns(turns[-max(1, settings.CONTEXT_MAX_USER_TURNS) :])
-
-    while _estimate_messages_tokens(pinned + context_history) > token_budget and context_history:
-        turns = _group_messages_by_user_turn(context_history)
-        if len(turns) <= 1:
-            context_history = context_history[1:]
-        else:
-            context_history = _flatten_turns(turns[1:])
-
-    estimated_tokens = _estimate_messages_tokens(pinned + context_history)
-    return pinned + context_history, token_budget, estimated_tokens
 
 
 async def stream_chat_with_session(
@@ -265,7 +216,7 @@ async def stream_chat_with_session(
 
         react_messages = data.get("messages", [])
         for msg in react_messages:
-            session_manager.add_message(
+            persisted = session_manager.add_message(
                 session_id=context.session_id,
                 role=msg.get("role", "assistant"),
                 content=msg.get("content"),
@@ -276,18 +227,33 @@ async def stream_chat_with_session(
                 reasoning_content=msg.get("reasoning_content"),
                 metadata={"provider": context.provider, "session_key": context.session_key},
             )
+            if persisted:
+                session = session_manager.get_session(context.session_id)
+                if session:
+                    persist_session_message(session_store, session, persisted)
         if react_messages:
             saved_from_react = True
             done_data_pending = None
+            await _finalize_turn_memory(
+                session_manager,
+                context=context,
+            )
 
     if done_data_pending and not saved_from_react:
-        session_manager.add_message(
+        persisted = session_manager.add_message(
             session_id=context.session_id,
             role="assistant",
             content=done_data_pending["answer"],
             thinking=done_data_pending["thinking"],
             metadata={"provider": context.provider, "session_key": context.session_key},
         )
+        session = session_manager.get_session(context.session_id)
+        if session and persisted:
+            persist_session_message(session_store, session, persisted)
+            await _finalize_turn_memory(
+                session_manager,
+                context=context,
+            )
 
     yield _to_sse(
         {
@@ -296,5 +262,19 @@ async def stream_chat_with_session(
             "session_key": context.session_key,
             "token_budget": context.token_budget,
             "estimated_tokens": context.estimated_tokens,
+            "memory_debug": context.memory_debug,
         }
+    )
+
+
+async def _finalize_turn_memory(session_manager: Any, *, context: ChatTurnContext) -> None:
+    if context.finalized:
+        return
+    context.finalized = True
+    context.memory_debug = await memory_runtime.finalize_turn(
+        session_manager,
+        session_id=context.session_id,
+        input_source=context.input_source,
+        token_budget=context.token_budget,
+        memory_debug=context.memory_debug,
     )

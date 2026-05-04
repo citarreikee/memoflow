@@ -35,6 +35,8 @@ Inside the chat client:
 
 - `/exit` exits
 - `/model kimi-k2.5` switches model
+- DeepSeek models are configured by `DEEPSEEK_MODELS`; `/api/chat` will forward any `deepseek*` model name to DeepSeek.
+- Per-model context windows can be overridden with `MODEL_CONTEXT_WINDOWS`, for example `qwen3:30b-a3b=32768,custom-model=131072`.
 - `/tools off` disables ReAct tools
 - `/tools on` enables ReAct tools
 

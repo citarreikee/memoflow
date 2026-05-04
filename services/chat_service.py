@@ -10,6 +10,7 @@ from services.memory.checkpoints import get_latest_checkpoint
 from services.memory.runtime import RuntimeInput, memory_runtime
 from services.memory.session_store import session_store
 from services.memory.transcript_store import persist_session_message
+from services.model_context import resolve_model_context_policy
 
 
 @dataclass
@@ -22,6 +23,7 @@ class ChatTurnContext:
     workspace_dir: str
     messages: List[Dict[str, Any]] = field(default_factory=list)
     token_budget: int = 0
+    context_policy: Dict[str, Any] = field(default_factory=dict)
     estimated_tokens: int = 0
     file_memories: List[Dict[str, str]] = field(default_factory=list)
     pending_checkpoint: Optional[Dict[str, Any]] = None
@@ -108,7 +110,8 @@ async def prepare_chat_turn(
         persist_session_message(session_store, session, user_message_obj)
 
     history_messages = session_manager.get_history(session_id=session.session_id, limit=None) or []
-    token_budget = _resolve_token_budget(provider)
+    context_policy = resolve_model_context_policy(model=model, provider=provider)
+    token_budget = context_policy.token_budget
     existing_checkpoint = get_latest_checkpoint(session_store, session.session_id)
     context_package = await memory_runtime.prepare_turn(
         RuntimeInput(
@@ -122,6 +125,7 @@ async def prepare_chat_turn(
             history_messages=history_messages,
             latest_checkpoint=existing_checkpoint,
             token_budget=token_budget,
+            context_policy=context_policy.to_dict(),
         )
     )
     messages = context_package.messages
@@ -138,6 +142,7 @@ async def prepare_chat_turn(
         workspace_dir=session.metadata.get("workspace_dir") or os.getcwd(),
         messages=messages,
         token_budget=token_budget,
+        context_policy=context_policy.to_dict(),
         estimated_tokens=estimated_tokens,
         file_memories=file_memories,
         pending_checkpoint=pending_checkpoint,
@@ -153,22 +158,6 @@ def _parse_sse_data_event(event: str) -> Optional[Dict[str, Any]]:
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
-
-
-def _context_window_for_provider(provider: str) -> int:
-    if provider == "deepseek":
-        return settings.DEEPSEEK_CONTEXT_WINDOW
-    if provider == "kimi":
-        return settings.KIMI_CONTEXT_WINDOW
-    return settings.OLLAMA_CONTEXT_WINDOW
-
-
-def _resolve_token_budget(provider: str) -> int:
-    window = max(2048, _context_window_for_provider(provider))
-    if settings.CONTEXT_TOKEN_BUDGET > 0:
-        return min(window, settings.CONTEXT_TOKEN_BUDGET)
-    ratio = settings.CONTEXT_BUDGET_RATIO if settings.CONTEXT_BUDGET_RATIO > 0 else 0.75
-    return max(1024, int(window * ratio))
 
 
 async def stream_chat_with_session(

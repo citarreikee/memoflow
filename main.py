@@ -20,7 +20,12 @@ from services.chat_service import (
     stream_chat_with_session,
 )
 from services.model_catalog import ModelCatalogState, get_models_response
-from services.system_service import get_api_info_payload, get_health_payload, get_tools_payload
+from services.system_service import (
+    get_api_info_payload,
+    get_health_payload,
+    get_memory_checkpoint_payload,
+    get_tools_payload,
+)
 
 
 app = FastAPI(title=settings.API_TITLE, version=settings.API_VERSION, description=settings.API_DESCRIPTION)
@@ -145,6 +150,13 @@ async def api_info():
     return await _run_with_500(get_api_info_payload, "Failed to get info")
 
 
+async def get_memory_checkpoint(session_id: str, checkpoint_id: str = ""):
+    return await _run_with_404(
+        lambda: get_memory_checkpoint_payload(session_id, checkpoint_id),
+        "Session not found",
+    )
+
+
 register_system_routes(
     app,
     root=root,
@@ -152,6 +164,7 @@ register_system_routes(
     health_check=health_check,
     get_tools=get_tools,
     api_info=api_info,
+    get_memory_checkpoint=get_memory_checkpoint,
 )
 register_chat_routes(
     app,

@@ -35,9 +35,14 @@ class Settings:
         self.OLLAMA_API_BASE: str = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip("/")
         self.DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
         self.DEEPSEEK_API_BASE: str = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
+        self.DEEPSEEK_MODELS: str = os.getenv(
+            "DEEPSEEK_MODELS",
+            "deepseek-v4-pro,deepseek-v4-flash,deepseek-v4,deepseek-chat,deepseek-reasoner",
+        )
         self.KIMI_API_KEY: str = os.getenv("KIMI_API_KEY", "")
         self.KIMI_API_BASE: str = os.getenv("KIMI_API_BASE", "https://api.moonshot.cn/v1").rstrip("/")
         self.KIMI_MODELS: str = os.getenv("KIMI_MODELS", "")
+        self.MODEL_CONTEXT_WINDOWS: str = os.getenv("MODEL_CONTEXT_WINDOWS", "")
 
         self.CONTEXT_MAX_USER_TURNS: int = int(os.getenv("CONTEXT_MAX_USER_TURNS", "8"))
         self.CONTEXT_BUDGET_RATIO: float = float(os.getenv("CONTEXT_BUDGET_RATIO", "0.75"))
@@ -74,7 +79,7 @@ class Settings:
             os.getenv("SIDECAR_COMPACTION_TIMEOUT_SECONDS", "120")
         )
         self.SIDECAR_COMPACTION_NUM_PREDICT: int = int(os.getenv("SIDECAR_COMPACTION_NUM_PREDICT", "800"))
-        self.DEEPSEEK_CONTEXT_WINDOW: int = int(os.getenv("DEEPSEEK_CONTEXT_WINDOW", "128000"))
+        self.DEEPSEEK_CONTEXT_WINDOW: int = int(os.getenv("DEEPSEEK_CONTEXT_WINDOW", "1000000"))
         self.KIMI_CONTEXT_WINDOW: int = int(os.getenv("KIMI_CONTEXT_WINDOW", "256000"))
         self.OLLAMA_CONTEXT_WINDOW: int = int(os.getenv("OLLAMA_CONTEXT_WINDOW", "32768"))
 

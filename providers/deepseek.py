@@ -116,28 +116,10 @@ async def generate_deepseek_completion(model: str, messages: list, *, timeout: f
 
 
 async def get_deepseek_models() -> list[Dict[str, Any]]:
+    models = [model.strip() for model in settings.DEEPSEEK_MODELS.split(",") if model.strip()]
     return [
-        {
-            "name": "deepseek-v4-pro",
-            "id": "deepseek-v4-pro",
-            "size": "API",
-            "modified": "",
-            "provider": "deepseek",
-        },
-        {
-            "name": "deepseek-v4-flash",
-            "id": "deepseek-v4-flash",
-            "size": "API",
-            "modified": "",
-            "provider": "deepseek",
-        },
-        {
-            "name": "deepseek-v4",
-            "id": "deepseek-v4",
-            "size": "API",
-            "modified": "",
-            "provider": "deepseek",
-        },
+        {"name": model, "id": model, "size": "API", "modified": "", "provider": "deepseek"}
+        for model in models
     ]
 
 
@@ -148,7 +130,7 @@ async def check_deepseek_available() -> bool:
         async with _create_async_client(timeout=5.0) as client:
             response = await client.post(
                 DEEPSEEK_URL,
-                json={"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "test"}], "max_tokens": 1},
+                json={"model": (await get_deepseek_models())[0]["id"], "messages": [{"role": "user", "content": "test"}], "max_tokens": 1},
                 headers=_build_headers(),
             )
             return response.status_code in [200, 400]

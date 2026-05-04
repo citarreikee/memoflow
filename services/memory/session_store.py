@@ -172,6 +172,11 @@ class SessionStore:
             row = conn.execute("SELECT COUNT(*) AS count FROM episodes WHERE session_id = ?", (session_id,)).fetchone()
             return int(row["count"]) if row else 0
 
+    def session_exists(self, session_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute("SELECT 1 FROM sessions WHERE session_id = ? LIMIT 1", (session_id,)).fetchone()
+            return row is not None
+
     def insert_episode(
         self,
         *,
@@ -260,6 +265,23 @@ class SessionStore:
                 LIMIT 1
                 """,
                 (session_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "checkpoint_id": row["checkpoint_id"],
+                "session_id": row["session_id"],
+                "created_at": row["created_at"],
+                "token_estimate": row["token_estimate"],
+                "covered_episode_ids": json.loads(row["covered_episode_ids_json"]),
+                "summary": json.loads(row["summary_json"]),
+            }
+
+    def get_checkpoint(self, checkpoint_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM checkpoints WHERE checkpoint_id = ?",
+                (checkpoint_id,),
             ).fetchone()
             if not row:
                 return None

@@ -11,6 +11,10 @@ from services.context_utils import (
     history_message_to_dict,
     trim_tool_message_content,
 )
+from services.memory.checkpoint_audit import (
+    build_checkpoint_trace,
+    sanitize_checkpoint_summary,
+)
 from services.memory.checkpoints import get_latest_checkpoint, save_checkpoint
 from services.memory.compaction import build_checkpoint_summary, estimate_checkpoint_tokens, split_turns_for_compaction
 from services.memory.policy import (
@@ -41,6 +45,7 @@ class RuntimeInput:
     history_messages: List[Any]
     latest_checkpoint: Optional[Dict[str, Any]]
     token_budget: int
+    context_policy: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -82,12 +87,18 @@ class MemoryRuntime:
             user_message=runtime_input.user_message,
         )
         if decision.load_checkpoint:
+            checkpoint_trace = build_checkpoint_trace(
+                self.store,
+                session_id=runtime_input.session_id,
+                checkpoint=runtime_input.latest_checkpoint,
+            )
             events.add(
                 "checkpoint_loaded",
                 checkpoint_id=runtime_input.latest_checkpoint.get("checkpoint_id") if runtime_input.latest_checkpoint else None,
                 covered_count=len(runtime_input.latest_checkpoint.get("covers_episode_ids", []))
                 if runtime_input.latest_checkpoint
                 else 0,
+                trace=checkpoint_trace,
             )
 
         package = assemble_working_set(
@@ -131,8 +142,10 @@ class MemoryRuntime:
         debug = self._build_debug(
             decision=decision,
             state=state,
+            session_id=runtime_input.session_id,
             estimated_tokens=estimated_tokens,
             token_budget=runtime_input.token_budget,
+            context_policy=runtime_input.context_policy,
             checkpoint=runtime_input.latest_checkpoint,
             recent_turn_count=package.recent_turn_count,
             file_memories=package.file_memories,
@@ -217,6 +230,11 @@ class MemoryRuntime:
                     events.add("sidecar_compaction_succeeded", **compaction_debug)
                 elif compaction_debug.get("used_fallback"):
                     events.add("sidecar_compaction_failed", **compaction_debug)
+                summary, quality_report = sanitize_checkpoint_summary(summary)
+                events.add("checkpoint_quality_evaluated", **quality_report.to_dict())
+                if not quality_report.ok:
+                    events.add("checkpoint_save_skipped", reason="quality_gate_failed", quality=quality_report.to_dict())
+                    return self._merge_finalize_debug(debug, events, post_policy, None)
                 covered_episode_ids = self._covered_episode_ids_for_count(session_id, covered_count + len(older_turns))
                 if covered_episode_ids:
                     saved_checkpoint = save_checkpoint(
@@ -230,6 +248,8 @@ class MemoryRuntime:
                         "checkpoint_saved",
                         checkpoint_id=saved_checkpoint["checkpoint_id"],
                         covered_count=len(covered_episode_ids),
+                        trace=build_checkpoint_trace(self.store, session_id=session_id, checkpoint=saved_checkpoint),
+                        quality=quality_report.to_dict(),
                     )
             except Exception as exc:
                 events.add("sidecar_compaction_failed", error=str(exc))
@@ -296,8 +316,10 @@ class MemoryRuntime:
         *,
         decision: RuntimePolicyDecision,
         state: RuntimeState,
+        session_id: str,
         estimated_tokens: int,
         token_budget: int,
+        context_policy: Optional[Dict[str, Any]],
         checkpoint: Optional[Dict[str, Any]],
         recent_turn_count: int,
         file_memories: List[Dict[str, str]],
@@ -306,6 +328,7 @@ class MemoryRuntime:
         pressure_ratio = estimated_tokens / token_budget if token_budget > 0 else 0.0
         return {
             "runtime_version": RUNTIME_VERSION,
+            "audit_version": "0.1",
             "policy": {
                 "load_checkpoint": decision.load_checkpoint,
                 "load_file_memory": decision.load_file_memory,
@@ -315,6 +338,13 @@ class MemoryRuntime:
                 "reason": decision.reason,
             },
             "budget": {
+                "model": context_policy.get("model") if context_policy else None,
+                "provider": context_policy.get("provider") if context_policy else None,
+                "context_window": context_policy.get("context_window") if context_policy else None,
+                "context_window_source": context_policy.get("context_window_source") if context_policy else None,
+                "budget_ratio": context_policy.get("budget_ratio") if context_policy else None,
+                "threshold_source": context_policy.get("threshold_source") if context_policy else None,
+                "thresholds": context_policy.get("thresholds") if context_policy else None,
                 "token_budget": token_budget,
                 "estimated_tokens": estimated_tokens,
                 "pressure_ratio": round(pressure_ratio, 4),
@@ -325,8 +355,18 @@ class MemoryRuntime:
                 "checkpoint_id": checkpoint.get("checkpoint_id") if checkpoint else None,
                 "recent_turn_count": recent_turn_count,
                 "covered_episode_count": len(checkpoint.get("covers_episode_ids", [])) if checkpoint else 0,
+                "checkpoint_trace": build_checkpoint_trace(self.store, session_id=session_id, checkpoint=checkpoint),
                 "file_memory": [item["path"] for item in file_memories],
                 "retrieval_pack": [],
+            },
+            "audit": {
+                "answering_questions": [
+                    "what_context_was_loaded",
+                    "why_this_policy_was_chosen",
+                    "what_was_persisted_after_turn",
+                ],
+                "checkpoint_quality": None,
+                "checkpoint_trace": None,
             },
             "events": events.names(),
             "event_details": events.to_dicts(),
@@ -350,6 +390,19 @@ class MemoryRuntime:
         if saved_checkpoint:
             debug.setdefault("sources", {})
             debug["sources"]["checkpoint_saved"] = saved_checkpoint["checkpoint_id"]
+            debug["sources"]["checkpoint_trace"] = build_checkpoint_trace(
+                self.store,
+                session_id=saved_checkpoint["session_id"],
+                checkpoint=saved_checkpoint,
+            )
+        debug.setdefault("audit", {})
+        for event in events.to_dicts():
+            event_type = event.get("type")
+            data = event.get("data") or {}
+            if event_type == "checkpoint_quality_evaluated":
+                debug["audit"]["checkpoint_quality"] = data
+            if event_type in {"checkpoint_loaded", "checkpoint_saved"} and data.get("trace"):
+                debug["audit"]["checkpoint_trace"] = data["trace"]
         return debug
 
 

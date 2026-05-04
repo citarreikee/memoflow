@@ -41,3 +41,10 @@ def get_latest_checkpoint(session_store: SessionStore, session_id: str) -> Optio
     checkpoint["covers_episode_ids"] = checkpoint.pop("covered_episode_ids", [])
     return checkpoint
 
+
+def get_checkpoint(session_store: SessionStore, checkpoint_id: str) -> Optional[Dict[str, Any]]:
+    checkpoint = session_store.get_checkpoint(checkpoint_id)
+    if not checkpoint:
+        return None
+    checkpoint["covers_episode_ids"] = checkpoint.pop("covered_episode_ids", [])
+    return checkpoint

@@ -4,6 +4,8 @@ from typing import Any, Dict, List
 
 from config import settings
 from providers import deepseek, kimi, ollama, react_orchestrator
+from services.memory.checkpoint_audit import build_checkpoint_recovery_payload
+from services.memory.session_store import session_store
 
 
 async def get_health_payload() -> Dict[str, Any]:
@@ -44,3 +46,13 @@ async def get_api_info_payload() -> Dict[str, Any]:
         "total_models": len(all_models),
         "models": [model["name"] for model in all_models],
     }
+
+
+def get_memory_checkpoint_payload(session_id: str, checkpoint_id: str = "") -> Dict[str, Any]:
+    if not session_store.session_exists(session_id):
+        raise KeyError("Session not found")
+    return build_checkpoint_recovery_payload(
+        session_store,
+        session_id=session_id,
+        checkpoint_id=checkpoint_id or None,
+    )

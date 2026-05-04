@@ -90,7 +90,18 @@ Field meanings:
 - `workspace_dir`: repository directory for file memory lookup.
 - `history_messages`: raw session messages currently known in memory.
 - `latest_checkpoint`: latest saved working checkpoint, if any.
-- `token_budget`: resolved model context budget for this provider.
+- `token_budget`: resolved model context budget for this concrete model.
+
+Model context policy:
+
+- Runtime must resolve context windows by concrete model first, then provider fallback.
+- DeepSeek V4 models (`deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4`) are treated as 1M-context models according to DeepSeek API documentation.
+- DeepSeek legacy aliases (`deepseek-chat`, `deepseek-reasoner`) are treated as 128K-context compatibility models according to DeepSeek API documentation.
+- Kimi K2.5 / Thinking / Turbo known models are treated as 256K-context models according to Moonshot API documentation.
+- Local or unknown models must use explicit `MODEL_CONTEXT_WINDOWS` overrides or provider fallback; do not invent per-model windows for local models.
+- Unknown `deepseek*` model names are still forwarded to DeepSeek and use `DEEPSEEK_CONTEXT_WINDOW` as fallback.
+- `CONTEXT_BUDGET_RATIO`, `CONTEXT_COMPACTION_TRIGGER_RATIO`, `watch`, `emergency`, and `hard_fail` are Memoflow runtime policy thresholds, not provider official limits.
+- `memory_debug.budget` must expose `model`, `provider`, `context_window`, `context_window_source`, `budget_ratio`, `token_budget`, `threshold_source`, and `thresholds`.
 
 ## 6. Runtime State
 

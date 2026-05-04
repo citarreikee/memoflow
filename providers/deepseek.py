@@ -117,10 +117,23 @@ async def generate_deepseek_completion(model: str, messages: list, *, timeout: f
 
 async def get_deepseek_models() -> list[Dict[str, Any]]:
     return [
-        {"name": "deepseek-chat", "id": "deepseek-chat", "size": "API", "modified": "", "provider": "deepseek"},
         {
-            "name": "deepseek-reasoner",
-            "id": "deepseek-reasoner",
+            "name": "deepseek-v4-pro",
+            "id": "deepseek-v4-pro",
+            "size": "API",
+            "modified": "",
+            "provider": "deepseek",
+        },
+        {
+            "name": "deepseek-v4-flash",
+            "id": "deepseek-v4-flash",
+            "size": "API",
+            "modified": "",
+            "provider": "deepseek",
+        },
+        {
+            "name": "deepseek-v4",
+            "id": "deepseek-v4",
             "size": "API",
             "modified": "",
             "provider": "deepseek",
@@ -135,7 +148,7 @@ async def check_deepseek_available() -> bool:
         async with _create_async_client(timeout=5.0) as client:
             response = await client.post(
                 DEEPSEEK_URL,
-                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": "test"}], "max_tokens": 1},
+                json={"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "test"}], "max_tokens": 1},
                 headers=_build_headers(),
             )
             return response.status_code in [200, 400]

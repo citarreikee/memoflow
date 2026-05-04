@@ -13,7 +13,7 @@ import httpx
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Chat with the Memoflow backend from your terminal.")
     parser.add_argument("--base-url", default="http://localhost:3001", help="Backend base URL.")
-    parser.add_argument("--model", default="deepseek-chat", help="Model name to use.")
+    parser.add_argument("--model", default="deepseek-v4-pro", help="Model name to use.")
     parser.add_argument("--session-key", default="cli", help="Stable session key for this terminal chat.")
     parser.add_argument("--no-tools", action="store_true", help="Disable ReAct tool calling for chat turns.")
     return parser.parse_args()

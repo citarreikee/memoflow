@@ -28,7 +28,7 @@ Keep the backend running in one terminal, then open another terminal:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python chat_cli.py --model deepseek-chat
+python chat_cli.py --model deepseek-v4-pro
 ```
 
 Inside the chat client:
@@ -41,5 +41,5 @@ Inside the chat client:
 ```powershell
 curl.exe -N -X POST http://localhost:3001/api/chat `
   -H "Content-Type: application/json" `
-  -d "{\"model\":\"deepseek-chat\",\"message\":\"hello\",\"enableTools\":true}"
+  -d "{\"model\":\"deepseek-v4-pro\",\"message\":\"hello\",\"enableTools\":true}"
 ```

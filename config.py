@@ -34,7 +34,7 @@ class Settings:
 
         self.OLLAMA_API_BASE: str = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip("/")
         self.DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
-        self.DEEPSEEK_API_BASE: str = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1").rstrip("/")
+        self.DEEPSEEK_API_BASE: str = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
         self.KIMI_API_KEY: str = os.getenv("KIMI_API_KEY", "")
         self.KIMI_API_BASE: str = os.getenv("KIMI_API_BASE", "https://api.moonshot.cn/v1").rstrip("/")
         self.KIMI_MODELS: str = os.getenv("KIMI_MODELS", "")
@@ -68,8 +68,8 @@ class Settings:
             "yes",
             "on",
         }
-        self.SIDECAR_COMPACTION_PROVIDER: str = os.getenv("SIDECAR_COMPACTION_PROVIDER", "ollama").strip() or "ollama"
-        self.SIDECAR_COMPACTION_MODEL: str = os.getenv("SIDECAR_COMPACTION_MODEL", "qwen3:30b-a3b").strip()
+        self.SIDECAR_COMPACTION_PROVIDER: str = os.getenv("SIDECAR_COMPACTION_PROVIDER", "deepseek").strip() or "deepseek"
+        self.SIDECAR_COMPACTION_MODEL: str = os.getenv("SIDECAR_COMPACTION_MODEL", "deepseek-v4-flash").strip()
         self.SIDECAR_COMPACTION_TIMEOUT_SECONDS: float = float(
             os.getenv("SIDECAR_COMPACTION_TIMEOUT_SECONDS", "120")
         )

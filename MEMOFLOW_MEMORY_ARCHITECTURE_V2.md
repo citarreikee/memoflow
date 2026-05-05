@@ -16,6 +16,10 @@ Current baseline in this repository:
 
 This v2 document is intentionally not a generic survey. It is an implementation plan that maps external SOTA systems into Memoflow modules, data structures, trigger timing, and prompt responsibilities.
 
+Controlling roadmap:
+
+- `MEMOFLOW_MEMORY_MASTER_PLAN.md` owns cross-spec dependencies, canonical vocabulary, and implementation order.
+
 ## 2. Design Position
 
 ### 2.1 Core judgment
@@ -220,10 +224,16 @@ Purpose:
 - decide whether retrieval is needed
 - decide which stores to query
 - assemble a bounded context pack for the next turn
+- reuse stable context material when source fingerprints are clean
+- keep query-dependent retrieval separate from cached stable frames
 
 Stores:
 
 - none; this is a composition layer
+
+Related design:
+
+- `MEMOFLOW_INCREMENTAL_CONTEXT_COMPILATION.md` defines stable context frames, turn deltas, retrieval packs, dirty flags, and append-only fast path semantics.
 
 ## 4.2 Proposed module layout
 
@@ -582,37 +592,69 @@ Main code impact:
 - add `services/memory/checkpoints.py`
 - add `services/memory/file_memory.py`
 
-## 9.2 v0.2: Background Semantic Memory
+## 9.2 v0.2: Memory Formation and Storage Planning
 
 Deliver:
 
-- reflection jobs
-- model-driven memory atom extraction
-- scoped semantic store
-- retrieval planner for semantic memory
+- background memory formation jobs
+- lightweight memory candidate extraction
+- deterministic worth-storing policy
+- storage-shape planning across log, KV, vector, file, and graph substrates
+- dry-run write plans with episode evidence and debug output
 
 Main code impact:
 
-- add `background_reflection.py`
-- add `semantic_manager.py`
-- add `embedding_index.py`
-- add `retrieval_planner.py`
+- add `services/memory/formation/`
+- add mock store contracts under `services/memory/stores/`
+- add JSONL or in-memory write-plan logging
+- hook formation scheduling into runtime `finalize_turn`
 
-## 9.3 v0.3: Temporal Graph Memory
+## 9.3 v0.3: Durable Memory Storage
 
 Deliver:
 
-- graph ingest
-- supersession / invalidation
-- temporal retrieval
+- SQLite-backed durable memory store
+- persisted candidates and write plans
+- canonical memory records with episode evidence links
+- vector projection metadata without treating vectors as truth
+- relation graph edge tables for explicit relations
+- file memory suggestions requiring review
+- update/delete/supersede lifecycle mechanics
+- re-index job markers
+
+Related design:
+
+- `MEMOFLOW_MEMORY_V0_3_STORAGE_DESIGN.md` defines the durable storage schema and lifecycle rules.
+
+Do not deliver:
+
+- production vector ANN engine
+- external graph database
+- full retrieval injection
+- silent file memory writes
 
 ## 9.4 v0.4: Full Hybrid Retrieval Planner
 
 Deliver:
 
+- retrieval trigger policy
+- query reconstruction
 - multi-store retrieval policy
+- SQLite-backed exact KV, vector projection, graph edge, and evidence recall
 - relevance plus recency plus scope ranking
 - bounded context pack generation
+- retrieval-aware incremental context compilation
+
+Related design:
+
+- `MEMOFLOW_MEMORY_V0_4_RETRIEVAL_DESIGN.md` defines retrieval and context injection.
+
+Do not deliver:
+
+- memory dreaming / consolidation
+- production vector ANN engine
+- external graph database
+- automatic contradiction resolution
 
 ## 10. Concrete v0.1 Coding Rules
 

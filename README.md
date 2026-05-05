@@ -9,8 +9,19 @@ Current runtime provides:
 - DeepSeek, Kimi, and Ollama provider adapters
 - ReAct tool loop with a minimal safe `current_time` tool
 - Health, model, info, and tool listing endpoints
+- Optional memory formation, durable storage, and retrieval injection behind feature flags
 
-It does not include persistent memory, memory atom extraction, retrieval injection, graph memory, contradiction reconciliation, external queue workers, device control, Telegram, MiHome, Home Assistant, email, or web scraping logic.
+It does not include memory dreaming / long-term consolidation, contradiction reconciliation, external queue workers, device control, Telegram, MiHome, Home Assistant, email, or web scraping logic.
+
+## Design Docs
+
+- `MEMOFLOW_MEMORY_MASTER_PLAN.md`: controlling roadmap, spec dependencies, and canonical vocabulary.
+- `MEMOFLOW_MEMORY_ARCHITECTURE_V2.md`: overall memory architecture direction.
+- `MEMOFLOW_MEMORY_RUNTIME_DEV_SPEC.md`: v0.1 memory runtime development spec.
+- `MEMOFLOW_MEMORY_V0_2_DEV_SPEC.md`: v0.2 memory formation and storage planning spec.
+- `MEMOFLOW_MEMORY_V0_3_STORAGE_DESIGN.md`: v0.3 durable memory storage design.
+- `MEMOFLOW_MEMORY_V0_4_RETRIEVAL_DESIGN.md`: v0.4 retrieval and context injection design.
+- `MEMOFLOW_INCREMENTAL_CONTEXT_COMPILATION.md`: incremental context compilation and stable-frame cache design.
 
 ## Run
 

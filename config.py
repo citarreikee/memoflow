@@ -54,6 +54,52 @@ class Settings:
         self.CONTEXT_CHECKPOINT_TARGET_TOKENS: int = int(os.getenv("CONTEXT_CHECKPOINT_TARGET_TOKENS", "900"))
         self.CONTEXT_CHECKPOINT_HARD_MAX_TOKENS: int = int(os.getenv("CONTEXT_CHECKPOINT_HARD_MAX_TOKENS", "1400"))
         self.MEMORY_DATA_DIR: str = os.getenv("MEMORY_DATA_DIR", "data").strip() or "data"
+        self.MEMORY_FORMATION_ENABLED: bool = os.getenv("MEMORY_FORMATION_ENABLED", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.MEMORY_FORMATION_DRY_RUN: bool = os.getenv("MEMORY_FORMATION_DRY_RUN", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.MEMORY_FORMATION_EXTRACTOR: str = os.getenv("MEMORY_FORMATION_EXTRACTOR", "rule").strip().lower() or "rule"
+        self.MEMORY_FORMATION_PROVIDER: str = os.getenv("MEMORY_FORMATION_PROVIDER", "").strip().lower()
+        self.MEMORY_FORMATION_MODEL: str = os.getenv("MEMORY_FORMATION_MODEL", "").strip()
+        self.MEMORY_FORMATION_TIMEOUT_SECONDS: float = float(os.getenv("MEMORY_FORMATION_TIMEOUT_SECONDS", "60"))
+        self.MEMORY_FORMATION_MAX_CANDIDATES: int = int(os.getenv("MEMORY_FORMATION_MAX_CANDIDATES", "3"))
+        self.MEMORY_FORMATION_TURN_INTERVAL: int = int(os.getenv("MEMORY_FORMATION_TURN_INTERVAL", "4"))
+        self.MEMORY_WRITE_PLAN_LOG_DIR: str = (
+            os.getenv("MEMORY_WRITE_PLAN_LOG_DIR", self.MEMORY_DATA_DIR).strip() or self.MEMORY_DATA_DIR
+        )
+        self.MEMORY_FORMATION_BACKGROUND: bool = os.getenv("MEMORY_FORMATION_BACKGROUND", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.MEMORY_STORAGE_ENABLED: bool = os.getenv("MEMORY_STORAGE_ENABLED", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.MEMORY_STORAGE_APPLY_PLANS: bool = os.getenv("MEMORY_STORAGE_APPLY_PLANS", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.MEMORY_STORAGE_DB_PATH: str = os.getenv("MEMORY_STORAGE_DB_PATH", "").strip()
+        self.MEMORY_RETRIEVAL_ENABLED: bool = os.getenv("MEMORY_RETRIEVAL_ENABLED", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         self.FILE_MEMORY_ENABLED: bool = os.getenv("FILE_MEMORY_ENABLED", "true").strip().lower() in {
             "1",
             "true",

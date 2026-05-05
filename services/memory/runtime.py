@@ -17,6 +17,7 @@ from services.memory.checkpoint_audit import (
 )
 from services.memory.checkpoints import get_latest_checkpoint, save_checkpoint
 from services.memory.compaction import build_checkpoint_summary, estimate_checkpoint_tokens, split_turns_for_compaction
+from services.memory.formation.jobs import MemoryFormationJobRunner
 from services.memory.policy import (
     RuntimePolicyDecision,
     RuntimeState,
@@ -24,13 +25,15 @@ from services.memory.policy import (
     decide_post_turn_policy,
     decide_prepare_policy,
 )
+from services.memory.retrieval.assembler import render_retrieval_message
+from services.memory.retrieval.pipeline import MemoryRetrievalPipeline
 from services.memory.runtime_events import RuntimeEventLog
 from services.memory.session_store import SessionStore, session_store
 from services.memory.transcript_store import build_episode_payload, next_turn_index, persist_episode
 from services.memory.working_set import assemble_working_set
 
 
-RUNTIME_VERSION = "0.1"
+RUNTIME_VERSION = "0.2"
 
 
 @dataclass
@@ -64,6 +67,8 @@ class MemoryRuntime:
 
     def __init__(self, store: SessionStore) -> None:
         self.store = store
+        self.formation_jobs = MemoryFormationJobRunner(log_dir=settings.MEMORY_WRITE_PLAN_LOG_DIR)
+        self.retrieval = MemoryRetrievalPipeline()
 
     async def prepare_turn(self, runtime_input: RuntimeInput) -> ContextPackage:
         events = RuntimeEventLog()
@@ -101,6 +106,17 @@ class MemoryRuntime:
                 trace=checkpoint_trace,
             )
 
+        retrieval_pack = self.retrieval.run(
+            user_message=runtime_input.user_message,
+            session_key=runtime_input.session_key,
+            token_budget=runtime_input.token_budget,
+        )
+        retrieval_message = render_retrieval_message(retrieval_pack)
+        if retrieval_pack.items:
+            events.add("memory_retrieved", included_count=len(retrieval_pack.items), omitted_count=retrieval_pack.omitted_count)
+        else:
+            events.add("memory_retrieval_empty", trace=retrieval_pack.trace)
+
         package = assemble_working_set(
             history_messages=runtime_input.history_messages,
             token_budget=runtime_input.token_budget,
@@ -109,6 +125,7 @@ class MemoryRuntime:
             workspace_dir=runtime_input.workspace_dir,
             user_message=runtime_input.user_message,
             load_file_memory=decision.load_file_memory,
+            retrieval_message=retrieval_message,
         )
         if package.file_memories:
             events.add("file_memory_loaded", files=[item["path"] for item in package.file_memories])
@@ -134,6 +151,7 @@ class MemoryRuntime:
                     workspace_dir=runtime_input.workspace_dir,
                     user_message=runtime_input.user_message,
                     load_file_memory=decision.load_file_memory,
+                    retrieval_message=retrieval_message,
                 )
                 messages = package.messages
                 estimated_tokens = package.estimated_tokens
@@ -149,6 +167,7 @@ class MemoryRuntime:
             checkpoint=runtime_input.latest_checkpoint,
             recent_turn_count=package.recent_turn_count,
             file_memories=package.file_memories,
+            retrieval_pack=retrieval_pack.to_dict(),
             events=events,
         )
         return ContextPackage(
@@ -193,6 +212,13 @@ class MemoryRuntime:
         )
         persist_episode(self.store, episode_payload)
         events.add("episode_persisted", episode_id=episode_payload["episode_id"], turn_index=turn_index)
+        workspace_dir = (session.metadata or {}).get("workspace_dir") if hasattr(session, "metadata") else None
+        formation_debug = await self._run_memory_formation(
+            session_id=session_id,
+            episode_payload=episode_payload,
+            workspace_dir=workspace_dir,
+            events=events,
+        )
 
         latest_checkpoint = get_latest_checkpoint(self.store, session_id)
         history = self._history_to_provider_messages(history_messages)
@@ -234,7 +260,7 @@ class MemoryRuntime:
                 events.add("checkpoint_quality_evaluated", **quality_report.to_dict())
                 if not quality_report.ok:
                     events.add("checkpoint_save_skipped", reason="quality_gate_failed", quality=quality_report.to_dict())
-                    return self._merge_finalize_debug(debug, events, post_policy, None)
+                    return self._merge_finalize_debug(debug, events, post_policy, None, formation_debug=formation_debug)
                 covered_episode_ids = self._covered_episode_ids_for_count(session_id, covered_count + len(older_turns))
                 if covered_episode_ids:
                     saved_checkpoint = save_checkpoint(
@@ -254,7 +280,7 @@ class MemoryRuntime:
             except Exception as exc:
                 events.add("sidecar_compaction_failed", error=str(exc))
 
-        return self._merge_finalize_debug(debug, events, post_policy, saved_checkpoint)
+        return self._merge_finalize_debug(debug, events, post_policy, saved_checkpoint, formation_debug=formation_debug)
 
     def _build_state(
         self,
@@ -323,6 +349,7 @@ class MemoryRuntime:
         checkpoint: Optional[Dict[str, Any]],
         recent_turn_count: int,
         file_memories: List[Dict[str, str]],
+        retrieval_pack: Dict[str, Any],
         events: RuntimeEventLog,
     ) -> Dict[str, Any]:
         pressure_ratio = estimated_tokens / token_budget if token_budget > 0 else 0.0
@@ -357,8 +384,9 @@ class MemoryRuntime:
                 "covered_episode_count": len(checkpoint.get("covers_episode_ids", [])) if checkpoint else 0,
                 "checkpoint_trace": build_checkpoint_trace(self.store, session_id=session_id, checkpoint=checkpoint),
                 "file_memory": [item["path"] for item in file_memories],
-                "retrieval_pack": [],
+                "retrieval_pack": retrieval_pack.get("items", []),
             },
+            "retrieval": retrieval_pack,
             "audit": {
                 "answering_questions": [
                     "what_context_was_loaded",
@@ -378,6 +406,7 @@ class MemoryRuntime:
         events: RuntimeEventLog,
         post_policy: Optional[RuntimePolicyDecision],
         saved_checkpoint: Optional[Dict[str, Any]] = None,
+        formation_debug: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         debug.setdefault("events", [])
         debug["events"].extend(events.names())
@@ -395,6 +424,8 @@ class MemoryRuntime:
                 session_id=saved_checkpoint["session_id"],
                 checkpoint=saved_checkpoint,
             )
+        if formation_debug is not None:
+            debug["memory_formation"] = formation_debug
         debug.setdefault("audit", {})
         for event in events.to_dicts():
             event_type = event.get("type")
@@ -404,6 +435,63 @@ class MemoryRuntime:
             if event_type in {"checkpoint_loaded", "checkpoint_saved"} and data.get("trace"):
                 debug["audit"]["checkpoint_trace"] = data["trace"]
         return debug
+
+    async def _run_memory_formation(
+        self,
+        *,
+        session_id: str,
+        episode_payload: Dict[str, Any],
+        workspace_dir: Optional[str],
+        events: RuntimeEventLog,
+    ) -> Dict[str, Any]:
+        if not settings.MEMORY_FORMATION_ENABLED:
+            events.add("memory_formation_skipped", reason="disabled")
+            return {"triggered": False, "episode_ids": [episode_payload["episode_id"]], "skipped_reason": "disabled"}
+        try:
+            if settings.MEMORY_FORMATION_BACKGROUND:
+                self.formation_jobs.schedule(
+                    session_id=session_id,
+                    episode_payload=episode_payload,
+                    workspace_dir=workspace_dir,
+                )
+                events.add("memory_formation_scheduled", episode_id=episode_payload["episode_id"], background=True)
+                return {
+                    "triggered": True,
+                    "scheduled": True,
+                    "background": True,
+                    "episode_ids": [episode_payload["episode_id"]],
+                }
+            job_result = await self.formation_jobs.run(
+                session_id=session_id,
+                episode_payload=episode_payload,
+                workspace_dir=workspace_dir,
+            )
+            debug = job_result.to_debug_dict()
+            if not job_result.formation.triggered:
+                events.add(
+                    "memory_formation_skipped",
+                    reason=job_result.formation.skipped_reason,
+                    episode_id=episode_payload["episode_id"],
+                )
+                return debug
+            write_debug = debug.get("dry_run_writes") or {}
+            events.add(
+                "memory_formation_planned",
+                episode_id=episode_payload["episode_id"],
+                candidate_count=len(job_result.formation.candidates),
+                plan_count=len(job_result.formation.plans),
+                written_count=write_debug.get("total_written", 0),
+                dry_run=settings.MEMORY_FORMATION_DRY_RUN,
+            )
+            return debug
+        except Exception as exc:
+            events.add("memory_formation_failed", episode_id=episode_payload["episode_id"], error=str(exc))
+            return {
+                "triggered": False,
+                "episode_ids": [episode_payload["episode_id"]],
+                "skipped_reason": "formation_error",
+                "error": str(exc),
+            }
 
 
 def _collect_last_turn_messages(history_messages: List[Any]) -> List[Any]:

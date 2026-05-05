@@ -32,6 +32,7 @@ def assemble_working_set(
     workspace_dir: str,
     user_message: str,
     load_file_memory: bool,
+    retrieval_message: Optional[Dict[str, str]] = None,
 ) -> WorkingSet:
     """Assemble prompt messages from pinned prompts, checkpoint, files, and recent raw turns.
 
@@ -61,15 +62,19 @@ def assemble_working_set(
         for item in file_memories
     ]
 
-    messages = _compose_messages(pinned, checkpoint_message, file_memory_messages, history)
+    messages = _compose_messages(pinned, checkpoint_message, file_memory_messages, retrieval_message, history)
     while estimate_messages_tokens(messages) > token_budget and len(turns) > 1:
         turns = turns[1:]
         history = flatten_turns(turns)
-        messages = _compose_messages(pinned, checkpoint_message, file_memory_messages, history)
+        messages = _compose_messages(pinned, checkpoint_message, file_memory_messages, retrieval_message, history)
 
     if estimate_messages_tokens(messages) > token_budget and file_memory_messages:
         file_memory_messages = []
-        messages = _compose_messages(pinned, checkpoint_message, file_memory_messages, history)
+        messages = _compose_messages(pinned, checkpoint_message, file_memory_messages, retrieval_message, history)
+
+    if estimate_messages_tokens(messages) > token_budget and retrieval_message:
+        retrieval_message = None
+        messages = _compose_messages(pinned, checkpoint_message, file_memory_messages, retrieval_message, history)
 
     return WorkingSet(
         messages=messages,
@@ -83,12 +88,14 @@ def _compose_messages(
     pinned: List[Dict[str, Any]],
     checkpoint_message: Optional[Dict[str, Any]],
     file_memory_messages: List[Dict[str, Any]],
+    retrieval_message: Optional[Dict[str, str]],
     history: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     messages = list(pinned)
     if checkpoint_message:
         messages.append(checkpoint_message)
     messages.extend(file_memory_messages)
+    if retrieval_message:
+        messages.append(retrieval_message)
     messages.extend(history)
     return messages
-

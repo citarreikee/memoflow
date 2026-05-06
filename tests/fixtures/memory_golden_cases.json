@@ -1,0 +1,242 @@
+﻿[
+  {
+    "id": "stable_user_preference",
+    "candidate": {
+      "candidate_id": "cand_pref_concise",
+      "text": "The user prefers concise status summaries after validation runs.",
+      "type": "preference",
+      "scope": "user",
+      "action": "ADD",
+      "importance": 0.82,
+      "reason": "This should influence future response style for this user.",
+      "stability": "stable"
+    },
+    "evidence_episode_ids": ["ep_pref_1"],
+    "expected": {
+      "status": "planned",
+      "canonical_store": "semantic_kv",
+      "projections_include": ["episode_log", "vector_projection"],
+      "blocked_reasons_include": []
+    }
+  },
+  {
+    "id": "project_rule_file_suggestion",
+    "candidate": {
+      "candidate_id": "cand_project_rule",
+      "text": "Project rule: memory features must remain default-off unless explicitly enabled.",
+      "type": "project_rule",
+      "scope": "project",
+      "action": "ADD",
+      "importance": 0.9,
+      "reason": "This controls safe project behavior across future sessions.",
+      "stability": "stable"
+    },
+    "evidence_episode_ids": ["ep_rule_1"],
+    "expected": {
+      "status": "planned",
+      "canonical_store": "file_memory",
+      "projections_include": ["episode_log", "vector_projection"],
+      "blocked_reasons_include": []
+    }
+  },
+  {
+    "id": "session_project_rule_downgrades_from_file",
+    "candidate": {
+      "candidate_id": "cand_session_rule",
+      "text": "Session rule: answer this debugging thread in a compact format.",
+      "type": "project_rule",
+      "scope": "session",
+      "action": "ADD",
+      "importance": 0.76,
+      "reason": "This is only safe for the current session, not a project file.",
+      "stability": "evolving"
+    },
+    "evidence_episode_ids": ["ep_rule_2"],
+    "expected": {
+      "status": "planned",
+      "canonical_store": "semantic_kv",
+      "projections_include": ["episode_log", "vector_projection"],
+      "blocked_reasons_include": ["file_memory_scope_downgraded"]
+    }
+  },
+  {
+    "id": "architecture_decision",
+    "candidate": {
+      "candidate_id": "cand_decision",
+      "text": "Decision: v0.5 lifecycle work is deferred until v0.1-v0.4 contracts are stable.",
+      "type": "decision",
+      "scope": "project",
+      "action": "ADD",
+      "importance": 0.84,
+      "reason": "This affects near-term roadmap decisions.",
+      "stability": "evolving"
+    },
+    "evidence_episode_ids": ["ep_decision_1"],
+    "expected": {
+      "status": "planned",
+      "canonical_store": "semantic_kv",
+      "projections_include": ["episode_log", "vector_projection"],
+      "blocked_reasons_include": []
+    }
+  },
+  {
+    "id": "temporary_task_state_allowed",
+    "candidate": {
+      "candidate_id": "cand_task_state",
+      "text": "Current task state: stabilization audit is complete and formation quality baselines are next.",
+      "type": "task_state",
+      "scope": "project",
+      "action": "ADD",
+      "importance": 0.72,
+      "reason": "This helps continue the active project thread.",
+      "stability": "temporary"
+    },
+    "evidence_episode_ids": ["ep_state_1"],
+    "expected": {
+      "status": "planned",
+      "canonical_store": "semantic_kv",
+      "projections_include": ["episode_log"],
+      "blocked_reasons_include": []
+    }
+  },
+  {
+    "id": "explicit_dependency_relation",
+    "candidate": {
+      "candidate_id": "cand_relation",
+      "text": "Memory retrieval depends_on stable write plans and durable evidence links.",
+      "type": "entity_relation",
+      "scope": "project",
+      "action": "ADD",
+      "importance": 0.78,
+      "reason": "Explicit depends_on relation for graph traversal.",
+      "stability": "evolving"
+    },
+    "evidence_episode_ids": ["ep_relation_1"],
+    "expected": {
+      "status": "planned",
+      "canonical_store": "relation_graph",
+      "projections_include": ["episode_log"],
+      "blocked_reasons_include": []
+    }
+  },
+  {
+    "id": "vague_relation_blocked",
+    "candidate": {
+      "candidate_id": "cand_vague_relation",
+      "text": "Memory quality and retrieval are sort of related topics.",
+      "type": "entity_relation",
+      "scope": "project",
+      "action": "ADD",
+      "importance": 0.74,
+      "reason": "The relation is vague and has no explicit predicate.",
+      "stability": "evolving"
+    },
+    "evidence_episode_ids": ["ep_relation_2"],
+    "expected": {
+      "status": "blocked",
+      "canonical_store": null,
+      "projections_include": ["episode_log"],
+      "blocked_reasons_include": ["graph_relation_missing", "canonical_store_missing"]
+    }
+  },
+  {
+    "id": "low_importance_chatter_noop",
+    "candidate": {
+      "candidate_id": "cand_chatter",
+      "text": "The user said hello before asking the real question.",
+      "type": "episodic_event",
+      "scope": "session",
+      "action": "ADD",
+      "importance": 0.2,
+      "reason": "Low future utility.",
+      "stability": "temporary"
+    },
+    "evidence_episode_ids": ["ep_chatter_1"],
+    "expected": {
+      "status": "noop",
+      "canonical_store": null,
+      "projections_include": [],
+      "blocked_reasons_include": ["low_importance"]
+    }
+  },
+  {
+    "id": "sensitive_content_blocked",
+    "candidate": {
+      "candidate_id": "cand_sensitive",
+      "text": "The user's API key is sk-test-123 and should be remembered.",
+      "type": "profile_fact",
+      "scope": "user",
+      "action": "ADD",
+      "importance": 0.95,
+      "reason": "Sensitive credentials must not be written to memory.",
+      "stability": "stable"
+    },
+    "evidence_episode_ids": ["ep_sensitive_1"],
+    "expected": {
+      "status": "blocked",
+      "canonical_store": "semantic_kv",
+      "projections_include": ["episode_log"],
+      "blocked_reasons_include": ["sensitive_content"]
+    }
+  },
+  {
+    "id": "temporary_semantic_blocked",
+    "candidate": {
+      "candidate_id": "cand_temp_pref",
+      "text": "For the next five minutes, the user wants verbose explanations.",
+      "type": "preference",
+      "scope": "user",
+      "action": "ADD",
+      "importance": 0.7,
+      "reason": "This is temporary and should not become stable user memory.",
+      "stability": "temporary"
+    },
+    "evidence_episode_ids": ["ep_temp_1"],
+    "expected": {
+      "status": "blocked",
+      "canonical_store": "semantic_kv",
+      "projections_include": ["episode_log", "vector_projection"],
+      "blocked_reasons_include": ["temporary_memory"]
+    }
+  },
+  {
+    "id": "missing_evidence_blocked",
+    "candidate": {
+      "candidate_id": "cand_missing_evidence",
+      "text": "Decision: all memory writes need evidence ids.",
+      "type": "decision",
+      "scope": "project",
+      "action": "ADD",
+      "importance": 0.86,
+      "reason": "The rule is correct, but this test intentionally omits evidence.",
+      "stability": "stable"
+    },
+    "evidence_episode_ids": [],
+    "expected": {
+      "status": "blocked",
+      "canonical_store": "semantic_kv",
+      "projections_include": ["episode_log", "vector_projection"],
+      "blocked_reasons_include": ["evidence_missing"]
+    }
+  },
+  {
+    "id": "non_memory_noop",
+    "candidate": {
+      "candidate_id": "cand_non_memory",
+      "text": "This is a generic assistant acknowledgement with no future value.",
+      "type": "non_memory",
+      "scope": "session",
+      "action": "NOOP",
+      "importance": 0.1,
+      "reason": "No durable future utility.",
+      "stability": "unknown"
+    },
+    "evidence_episode_ids": ["ep_non_memory_1"],
+    "expected": {
+      "status": "noop",
+      "canonical_store": null,
+      "projections_include": [],
+      "blocked_reasons_include": ["candidate_noop"]
+    }
+  }
+]

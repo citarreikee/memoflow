@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import sys
@@ -148,6 +148,13 @@ async def test_retrieval_disabled_does_not_inject_message() -> None:
 
         assert package.debug["retrieval"]["intent"]["kind"] == "none"
         assert not any("Retrieved long-term memory" in str(message.get("content", "")) for message in package.messages)
+        compile_debug = package.debug["context_compile"]
+        assert compile_debug["version"] == "instrumentation_v0"
+        assert compile_debug["stable_frame_cache_enabled"] is False
+        assert compile_debug["reused_stable_frame"] is False
+        assert compile_debug["append_only_fast_path_used"] is False
+        assert compile_debug["retrieval_mode"] == "none"
+        assert "query_dependent_retrieval" not in compile_debug["dirty_reasons"]
 
 
 def test_retrieval_failure_is_empty_pack() -> None:

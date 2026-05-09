@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import settings
 from providers import deepseek, kimi, ollama
 from services.memory.formation.prompts import build_extraction_messages
+from services.memory.formation.quality import CandidateQualityReport, postprocess_candidates
 from services.memory.formation.schemas import MemoryCandidateLite, normalize_candidate
 
 
@@ -18,13 +19,23 @@ EXPLICIT_MEMORY_MARKERS = (
     "decision",
     "rule",
     "do not",
+    "depends_on",
+    "file memory",
+    "storage",
     "记住",
     "以后",
     "偏好",
     "决定",
     "规则",
     "不要",
+    "璁飁綇",
+    "浠ュ悗",
+    "鍋忓好",
+    "鍀冲畝",
+    "瑰勫垥",
+    "涓嶶渚",
 )
+
 
 PROJECT_MARKERS = (
     "architecture",
@@ -33,12 +44,21 @@ PROJECT_MARKERS = (
     "dependency",
     "constraint",
     "spec",
+    "depends_on",
+    "file memory",
+    "storage",
     "架构",
     "设计",
     "阶段",
     "依赖",
     "约束",
     "文档",
+    "鏋舌瀝",
+    "璁捐宸",
+    "闃舵涆",
+    "渚濈禱",
+    "绾︶潿",
+    "鏂囩欢",
 )
 
 
@@ -67,12 +87,20 @@ def extract_candidates_rule_based(episode: Dict[str, Any], *, max_candidates: Op
         candidate = _candidate_from_sentence(sentence)
         if candidate:
             candidates.append(candidate)
-        if len(candidates) >= max_candidates:
-            break
-    return candidates
+    processed, _report = postprocess_candidates(candidates, max_candidates=max_candidates)
+    return processed
 
 
 def parse_candidate_payload(payload: Any, *, max_candidates: int = 3) -> List[MemoryCandidateLite]:
+    candidates, _report = parse_candidate_payload_with_report(payload, max_candidates=max_candidates)
+    return candidates
+
+
+def parse_candidate_payload_with_report(
+    payload: Any,
+    *,
+    max_candidates: int = 3,
+) -> Tuple[List[MemoryCandidateLite], CandidateQualityReport]:
     if isinstance(payload, dict):
         raw_items = payload.get("candidates", [])
     elif isinstance(payload, list):
@@ -80,10 +108,10 @@ def parse_candidate_payload(payload: Any, *, max_candidates: int = 3) -> List[Me
     else:
         raw_items = []
     candidates: List[MemoryCandidateLite] = []
-    for raw in raw_items[:max_candidates]:
+    for raw in raw_items:
         if isinstance(raw, dict):
             candidates.append(normalize_candidate(raw, fallback_id=f"cand_{uuid.uuid4().hex}"))
-    return candidates
+    return postprocess_candidates(candidates, max_candidates=max_candidates)
 
 
 async def extract_candidates_with_llm(episode: Dict[str, Any]) -> Tuple[List[MemoryCandidateLite], Dict[str, Any]]:
@@ -93,11 +121,15 @@ async def extract_candidates_with_llm(episode: Dict[str, Any]) -> Tuple[List[Mem
     try:
         raw_text = await _run_completion(provider=provider, model=model, messages=messages)
         payload = parse_candidate_json(raw_text)
-        candidates = parse_candidate_payload(payload, max_candidates=settings.MEMORY_FORMATION_MAX_CANDIDATES)
+        candidates, quality_report = parse_candidate_payload_with_report(
+            payload,
+            max_candidates=settings.MEMORY_FORMATION_MAX_CANDIDATES,
+        )
         return candidates, {
             "provider": provider,
             "model": model,
             "candidate_count": len(candidates),
+            "candidate_quality": quality_report.to_dict(),
             "raw_preview": raw_text[:1200],
         }
     except Exception as exc:
@@ -105,16 +137,29 @@ async def extract_candidates_with_llm(episode: Dict[str, Any]) -> Tuple[List[Mem
 
 
 def parse_candidate_json(raw_text: str) -> Any:
-    text = (raw_text or "").strip()
+    text = (raw_text or "").strip().lstrip("﻿")
     if not text:
         raise ValueError("empty_extraction_response")
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
-        extracted = _extract_json_object(text)
-        if extracted is None:
-            raise
-        return json.loads(extracted)
+    except json.JSONDecodeError as first_error:
+        first_valid_payload: Any = None
+        last_error: Exception = first_error
+        for fragment in _extract_json_fragments(text):
+            try:
+                payload = json.loads(fragment)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                continue
+            if first_valid_payload is None:
+                first_valid_payload = payload
+            if _looks_like_candidate_payload(payload):
+                return payload
+        if first_valid_payload is not None:
+            return first_valid_payload
+        raise last_error
+
+
 
 
 async def _run_completion(*, provider: str, model: str, messages: List[Dict[str, str]]) -> str:
@@ -161,12 +206,58 @@ def _resolve_model(provider: str) -> str:
     return settings.SIDECAR_COMPACTION_MODEL
 
 
-def _extract_json_object(text: str) -> Optional[str]:
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end <= start:
+def _extract_json_fragments(text: str) -> List[str]:
+    fragments: List[str] = []
+    for start, char in enumerate(text):
+        if char not in "{[":
+            continue
+        fragment = _balanced_json_fragment(text, start)
+        if fragment is not None:
+            fragments.append(fragment)
+    return fragments
+
+
+def _balanced_json_fragment(text: str, start: int) -> Optional[str]:
+    opening = text[start]
+    if opening not in "{[":
         return None
-    return text[start : end + 1]
+    stack: List[str] = ["}" if opening == "{" else "]"]
+    in_string = False
+    escaped = False
+    for index in range(start + 1, len(text)):
+        char = text[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and in_string:
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char in "{[":
+            stack.append("}" if char == "{" else "]")
+            continue
+        if char in "}]":
+            if not stack or char != stack[-1]:
+                return None
+            stack.pop()
+            if not stack:
+                return text[start : index + 1]
+    return None
+
+
+def _looks_like_candidate_payload(payload: Any) -> bool:
+    if isinstance(payload, dict):
+        candidates = payload.get("candidates")
+        return isinstance(candidates, list)
+    if isinstance(payload, list):
+        return all(isinstance(item, dict) for item in payload)
+    return False
+
+
 
 
 def _candidate_from_sentence(sentence: str) -> MemoryCandidateLite | None:
@@ -174,25 +265,25 @@ def _candidate_from_sentence(sentence: str) -> MemoryCandidateLite | None:
     if len(cleaned) < 8:
         return None
     lowered = cleaned.lower()
-    if any(marker in lowered for marker in ("不要", "do not", "规则", "rule")):
-        memory_type = "project_rule"
-        scope = "project"
-        importance = 0.78
-        stability = "stable"
-    elif any(marker in lowered for marker in ("决定", "decision", "设计", "架构", "architecture", "design")):
-        memory_type = "decision"
-        scope = "project"
-        importance = 0.74
-        stability = "evolving"
-    elif any(marker in lowered for marker in ("偏好", "prefer", "喜欢", "希望")):
+    if any(marker in lowered for marker in ('偏好', 'prefer', '喜欢', '希望', '鍋忓好')):
         memory_type = "preference"
         scope = "user"
         importance = 0.72
         stability = "stable"
-    elif any(marker in lowered for marker in ("依赖", "depends", "阻塞", "blocks", "取代", "supersedes")):
+    elif any(marker in lowered for marker in ('依赖', 'depends', '阻塞', 'blocks', '取代', 'supersedes', '渚濈禱', '闃诽墣', '鍏取代')):
         memory_type = "entity_relation"
         scope = "project"
         importance = 0.70
+        stability = "evolving"
+    elif any(marker in lowered for marker in ('不要', 'do not', '规则', 'rule', '瑰勫垥', '涓嶶渚')):
+        memory_type = "project_rule"
+        scope = "project"
+        importance = 0.78
+        stability = "stable"
+    elif any(marker in lowered for marker in ('决定', 'decision', '设计', '架构', 'architecture', 'design', '鍀冲畝', '璁捐宸', '鏋舌瀝')):
+        memory_type = "decision"
+        scope = "project"
+        importance = 0.74
         stability = "evolving"
     elif any(marker in lowered for marker in PROJECT_MARKERS):
         memory_type = "project_rule"
@@ -228,5 +319,5 @@ def _split_sentences(text: str) -> List[str]:
     compact = re.sub(r"\s+", " ", text).strip()
     if not compact:
         return []
-    pieces = re.split(r"(?<=[。！？!?])\s+|(?<=[。！？!?])|(?<=\.)\s+", compact)
+    pieces = re.split(r"(?<=[\u3002\uff01\uff1f!?])\s+|(?<=[\u3002\uff01\uff1f!?])|(?<=\.)\s+|(?<=\u9286)", compact)
     return [piece.strip() for piece in pieces if piece.strip()]

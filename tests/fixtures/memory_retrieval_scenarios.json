@@ -1,0 +1,116 @@
+﻿[
+  {
+    "id": "preference_lookup_retrieves_user_style",
+    "description": "A preference query should retrieve the matching active preference and avoid unrelated records.",
+    "session_key": "session:retrieval-scenario",
+    "query": "Do you remember my preference for backend memory work plans?",
+    "seed_records": [
+      {
+        "scope": "session",
+        "namespace": "session:retrieval-scenario",
+        "type": "preference",
+        "key": "preference:backend-memory-work-plans",
+        "value": "User prefers concise implementation plans for backend memory work.",
+        "confidence": 0.92
+      },
+      {
+        "scope": "session",
+        "namespace": "session:retrieval-scenario",
+        "type": "decision",
+        "key": "decision:unrelated-ui-theme",
+        "value": "Decision: the UI prototype uses a seaside color palette.",
+        "confidence": 0.72
+      }
+    ],
+    "expected": {
+      "intent_kind": "preference_lookup",
+      "min_items": 1,
+      "must_include_text": ["concise implementation plans"],
+      "must_not_include_text": ["seaside color palette"],
+      "include_memory_types": ["preference"],
+      "include_sources": ["exact_record"]
+    }
+  },
+  {
+    "id": "decision_lookup_retrieves_project_decision",
+    "description": "A decision query should retrieve the matching project/session decision.",
+    "session_key": "session:retrieval-scenario",
+    "query": "What was the decision about post-turn compaction?",
+    "seed_records": [
+      {
+        "scope": "session",
+        "namespace": "session:retrieval-scenario",
+        "type": "decision",
+        "key": "decision:post-turn-compaction",
+        "value": "Decision: use post-turn compaction so user requests are not blocked before the answer.",
+        "confidence": 0.9
+      },
+      {
+        "scope": "session",
+        "namespace": "session:retrieval-scenario",
+        "type": "preference",
+        "key": "preference:verbose-debug",
+        "value": "User sometimes asks for verbose debug logs.",
+        "confidence": 0.7
+      }
+    ],
+    "expected": {
+      "intent_kind": "decision_lookup",
+      "min_items": 1,
+      "must_include_text": ["post-turn compaction", "not blocked before the answer"],
+      "must_not_include_text": ["verbose debug logs"],
+      "include_memory_types": ["decision"],
+      "include_sources": ["exact_record"]
+    }
+  },
+  {
+    "id": "relation_lookup_uses_graph_path",
+    "description": "A relation query should include graph_one_hop when graph evidence exists.",
+    "session_key": "session:retrieval-scenario",
+    "query": "What dependency relates retrieval and compaction checkpoints?",
+    "seed_graph_edges": [
+      {
+        "scope": "session",
+        "source_memory_id": "mem_retrieval",
+        "target_memory_id": "mem_compaction",
+        "relation_type": "depends_on",
+        "payload": {
+          "text": "Retrieval depends_on runtime compaction checkpoints for bounded context."
+        }
+      }
+    ],
+    "expected": {
+      "intent_kind": "relation_lookup",
+      "min_items": 1,
+      "must_include_text": ["depends_on", "compaction checkpoints"],
+      "must_not_include_text": [],
+      "include_memory_types": ["entity_relation"],
+      "include_sources": ["graph_one_hop"]
+    }
+  },
+  {
+    "id": "trivial_query_skips_retrieval",
+    "description": "A trivial greeting should not trigger retrieval.",
+    "session_key": "session:retrieval-scenario",
+    "query": "hello",
+    "seed_records": [
+      {
+        "scope": "session",
+        "namespace": "session:retrieval-scenario",
+        "type": "preference",
+        "key": "preference:anything",
+        "value": "User prefers concise summaries.",
+        "confidence": 0.9
+      }
+    ],
+    "expected": {
+      "intent_kind": "none",
+      "min_items": 0,
+      "max_items": 0,
+      "must_include_text": [],
+      "must_not_include_text": ["concise summaries"],
+      "include_memory_types": [],
+      "include_sources": []
+    }
+  }
+]

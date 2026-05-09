@@ -1,0 +1,123 @@
+﻿[
+  {
+    "id": "checkpoint_preserves_runtime_work",
+    "description": "Checkpoint fallback compaction should preserve task kernel, decisions, open loops, artifacts, tool outcomes, and user constraints.",
+    "turns": [
+      [
+        {
+          "role": "user",
+          "content": "We are building the Memoflow memory runtime. Requirement: main chat must stay thin and memory work must run after the answer."
+        },
+        {
+          "role": "assistant",
+          "content": "Decision: adopt post-turn compaction and durable worker queue for memory maintenance."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Open issue: add scenario-level eval for checkpoint summaries. Important path: services/memory/compaction.py and MEMOFLOW_MEMORY_ROADMAP.md."
+        },
+        {
+          "role": "assistant",
+          "content": "Next: verify checkpoint preserves open issue and artifact paths."
+        }
+      ],
+      [
+        {
+          "role": "tool",
+          "content": "Smoke tests passed: harness quick 16 cases."
+        },
+        {
+          "role": "assistant",
+          "content": "Plan: keep the eval deterministic before adding an LLM critic."
+        }
+      ]
+    ],
+    "expected": {
+      "debug": {
+        "used_fallback": true,
+        "used_sidecar": false
+      },
+      "fields": {
+        "task_kernel": {
+          "must_include": ["Memoflow memory runtime"]
+        },
+        "task_state": {
+          "must_include": ["scenario-level eval"]
+        },
+        "decisions": {
+          "must_include": ["post-turn compaction", "durable worker queue"]
+        },
+        "open_loops": {
+          "must_include": ["checkpoint summaries", "artifact paths"]
+        },
+        "important_artifacts": {
+          "must_include": ["services/memory/compaction.py", "MEMOFLOW_MEMORY_ROADMAP.md"]
+        },
+        "tool_outcomes": {
+          "must_include": ["harness quick 16 cases"]
+        },
+        "user_constraints": {
+          "must_include": ["main chat must stay thin"]
+        }
+      },
+      "must_not_include": ["invented api key", "unrelated payment system"]
+    }
+  },
+  {
+    "id": "checkpoint_merges_previous_summary",
+    "description": "Checkpoint fallback compaction should retain prior checkpoint facts while adding newly compacted turns.",
+    "previous_checkpoint": {
+      "summary": {
+        "task_kernel": "Prior task: stabilize retrieval and storage before lifecycle.",
+        "conversation": "Prior conversation summary.",
+        "task_state": "Prior state: storage scaffold exists.",
+        "open_loops": ["Prior open loop: add update and supersession contract tests."],
+        "decisions": ["Prior decision: retrieval remains default-off until quality gates are stronger."],
+        "important_artifacts": ["MEMOFLOW_MEMORY_HARNESS_REVIEW.md"],
+        "tool_outcomes": [],
+        "user_constraints": ["Prior constraint: do not start lifecycle dreaming yet."]
+      }
+    },
+    "turns": [
+      [
+        {
+          "role": "user",
+          "content": "Decision: formation scenario eval should start from raw episode messages instead of prewritten candidates."
+        },
+        {
+          "role": "assistant",
+          "content": "Next: connect the scenario eval into the harness runner."
+        }
+      ]
+    ],
+    "expected": {
+      "debug": {
+        "used_fallback": true,
+        "used_sidecar": false
+      },
+      "fields": {
+        "task_kernel": {
+          "must_include": ["stabilize retrieval and storage"]
+        },
+        "task_state": {
+          "must_include": ["raw episode messages"]
+        },
+        "decisions": {
+          "must_include": ["retrieval remains default-off", "raw episode messages"]
+        },
+        "open_loops": {
+          "must_include": ["supersession contract tests", "harness runner"]
+        },
+        "important_artifacts": {
+          "must_include": ["MEMOFLOW_MEMORY_HARNESS_REVIEW.md"]
+        },
+        "user_constraints": {
+          "must_include": ["do not start lifecycle dreaming yet"]
+        }
+      },
+      "must_not_include": ["lifecycle is complete"]
+    }
+  }
+]

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from config import settings
+from services.memory.formation.integration_planner import plan_memory_integration
+from services.memory.formation.neighborhood import MemoryNeighborhoodRepository
 from services.memory.formation.pipeline import MemoryFormationResult, run_memory_formation_dry_run
+from services.memory.jobs import MemoryJob, MemoryJobQueue
 from services.memory.storage.applier import MemoryApplyResult, MemoryWriteApplier
 from services.memory.storage.sqlite_store import MemorySQLiteStore
 from services.memory.stores.dry_run import DryRunWriteResult, write_dry_run_outputs
@@ -17,6 +19,7 @@ class MemoryFormationJobResult:
     write_result: Optional[DryRunWriteResult]
     storage_debug: Optional[Dict[str, Any]] = None
     apply_result: Optional[MemoryApplyResult] = None
+    integration_debug: Optional[Dict[str, Any]] = None
 
     def to_debug_dict(self) -> Dict[str, Any]:
         debug = self.formation.to_debug_dict()
@@ -27,13 +30,15 @@ class MemoryFormationJobResult:
         if self.apply_result:
             debug.setdefault("memory_storage", {})
             debug["memory_storage"].update(self.apply_result.to_dict())
+        if self.integration_debug:
+            debug["memory_integration"] = self.integration_debug
         return debug
 
 
 class MemoryFormationJobRunner:
-    def __init__(self, *, log_dir: str) -> None:
+    def __init__(self, *, log_dir: str, queue: MemoryJobQueue | None = None) -> None:
         self.log_dir = log_dir
-        self._tasks: List[asyncio.Task] = []
+        self.queue = queue or MemoryJobQueue.from_settings()
 
     async def run(
         self,
@@ -52,7 +57,13 @@ class MemoryFormationJobRunner:
             )
         storage_debug: Optional[Dict[str, Any]] = None
         apply_result: Optional[MemoryApplyResult] = None
+        integration_debug: Optional[Dict[str, Any]] = None
         if settings.MEMORY_STORAGE_ENABLED:
+            integration_debug = self._plan_integrations(
+                session_id=session_id,
+                workspace_dir=workspace_dir,
+                formation=formation,
+            )
             storage_debug, apply_result = self._persist_to_sqlite(
                 session_id=session_id,
                 episode_payload=episode_payload,
@@ -64,18 +75,75 @@ class MemoryFormationJobRunner:
             write_result=write_result,
             storage_debug=storage_debug,
             apply_result=apply_result,
+            integration_debug=integration_debug,
         )
 
-    def schedule(self, *, session_id: str, episode_payload: Dict[str, Any], workspace_dir: Optional[str] = None) -> asyncio.Task:
-        task = asyncio.create_task(
-            self.run(session_id=session_id, episode_payload=episode_payload, workspace_dir=workspace_dir)
+    def schedule(self, *, session_id: str, episode_payload: Dict[str, Any], workspace_dir: Optional[str] = None) -> MemoryJob:
+        return self.queue.enqueue(
+            job_type="memory_formation",
+            session_id=session_id,
+            episode_id=str(episode_payload.get("episode_id") or "") or None,
+            priority=50,
+            payload={
+                "session_id": session_id,
+                "episode_payload": episode_payload,
+                "workspace_dir": workspace_dir,
+                "dry_run": settings.MEMORY_FORMATION_DRY_RUN,
+                "storage_enabled": settings.MEMORY_STORAGE_ENABLED,
+            },
         )
-        self._tasks.append(task)
-        task.add_done_callback(self._discard_done_task)
-        return task
 
-    def _discard_done_task(self, task: asyncio.Task) -> None:
-        self._tasks = [item for item in self._tasks if item is not task]
+    async def run_queued_job(self, job: MemoryJob) -> MemoryFormationJobResult:
+        payload = job.payload or {}
+        result = await self.run(
+            session_id=str(payload.get("session_id") or job.session_id or ""),
+            episode_payload=payload.get("episode_payload") or {},
+            workspace_dir=payload.get("workspace_dir"),
+        )
+        self.queue.complete(job.job_id, result=result.to_debug_dict())
+        return result
+
+
+    def _plan_integrations(
+        self,
+        *,
+        session_id: str,
+        workspace_dir: Optional[str],
+        formation: MemoryFormationResult,
+    ) -> Dict[str, Any]:
+        if not formation.candidates:
+            return {"enabled": True, "candidate_count": 0, "plans": []}
+        store = MemorySQLiteStore.from_settings()
+        repository = MemoryNeighborhoodRepository(store)
+        plans: List[Dict[str, Any]] = []
+        action_counts: Dict[str, int] = {}
+        snapshot_count = 0
+        for candidate in formation.candidates:
+            snapshots = repository.fetch_for_candidate(
+                candidate,
+                session_id=session_id,
+                workspace_dir=workspace_dir,
+            )
+            integration = plan_memory_integration(candidate, existing_memories=snapshots)
+            action_counts[integration.action] = action_counts.get(integration.action, 0) + 1
+            snapshot_count += len(snapshots)
+            plans.append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "candidate_type": candidate.type,
+                    "candidate_scope": candidate.scope,
+                    "snapshot_count": len(snapshots),
+                    "snapshots": [snapshot.to_dict() for snapshot in snapshots],
+                    "plan": integration.to_dict(),
+                }
+            )
+        return {
+            "enabled": True,
+            "candidate_count": len(formation.candidates),
+            "snapshot_count": snapshot_count,
+            "action_counts": action_counts,
+            "plans": plans,
+        }
 
     def _persist_to_sqlite(
         self,

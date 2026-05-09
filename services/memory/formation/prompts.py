@@ -7,9 +7,10 @@ from typing import Any, Dict, List
 def build_extraction_messages(episode: Dict[str, Any], *, max_candidates: int) -> List[Dict[str, str]]:
     system_prompt = (
         "You are a memory formation sidecar for Memoflow. "
-        "Return only strict JSON. Do not use markdown. "
-        "Extract lightweight memory candidates only; do not plan storage, IDs, graph edges, TTL, or database tables. "
-        "Prefer NOOP when unsure. Do not infer hidden preferences from one ambiguous turn. "
+        "Your job is to extract lightweight memory candidates from one completed episode. "
+        "You may include a brief natural-language note, but your response must contain exactly one JSON object or JSON array fragment that the caller can parse. "
+        "Do not plan storage, IDs, graph edges, TTL, database tables, retrieval, or prompt injection. "
+        "Prefer NOOP or an empty candidates list when unsure. Do not infer hidden preferences from one ambiguous turn. "
         "Avoid sensitive personal data unless explicitly necessary for task continuity."
     )
     schema = {
@@ -28,8 +29,13 @@ def build_extraction_messages(episode: Dict[str, Any], *, max_candidates: int) -
     user_prompt = "\n\n".join(
         [
             f"Emit at most {max_candidates} candidates.",
-            "Required JSON shape:",
+            "Required JSON fragment shape. It may be surrounded by a short note, but the JSON fragment itself must be valid:",
             json.dumps(schema, ensure_ascii=False),
+            "Quality rules:",
+            "- Emit at most one candidate for the same durable fact.",
+            "- Candidate text must be specific, short, and evidence-backed by this episode.",
+            "- Use non_memory/NOOP or [] for greetings, vague chatter, or unsupported inferences.",
+            "- Use entity_relation only for explicit predicates such as depends_on, blocks, supersedes, contradicts, or derived_from.",
             "Episode evidence:",
             _render_episode(episode),
         ]

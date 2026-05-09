@@ -429,3 +429,22 @@ The near-term goal is to make the runtime architecture ready for incremental com
 6. Do not optimize away final budget guard.
 7. Do not make fast path semantically different from full compilation.
 
+
+## 15. Current Implementation Status
+
+Updated: 2026-05-09
+
+This design is not fully implemented yet. The current codebase implements Phase 1 instrumentation only. `prepare_turn` now emits a `context_compile` debug block that records dirty reasons, retrieval mode/sources, estimated tokens, and whether the turn would be eligible for an append-only fast path.
+
+Current status:
+
+- Implemented: per-turn context compilation still happens every turn.
+- Implemented: retrieval pack remains query-dependent and separate from stable context material.
+- Implemented: `context_compile` instrumentation with `stable_frame_cache_enabled=false`, `reused_stable_frame=false`, `append_only_fast_path_used=false`, and explanatory dirty reasons.
+- Not implemented: `CompiledContextFrame` cache.
+- Not implemented: real `TurnDelta` append path.
+- Not implemented: dirty-flag-driven cache invalidation.
+- Not implemented: incremental counters that avoid full history regrouping.
+- Not implemented: append-only fast path execution.
+
+The current instrumentation is intentionally behavior-preserving. It prepares the runtime for later cache work without risking stale or duplicated context.

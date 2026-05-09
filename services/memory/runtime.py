@@ -159,6 +159,7 @@ class MemoryRuntime:
         events.add("context_compiled", estimated_tokens=estimated_tokens, message_count=len(messages))
         debug = self._build_debug(
             decision=decision,
+            runtime_input=runtime_input,
             state=state,
             session_id=runtime_input.session_id,
             estimated_tokens=estimated_tokens,
@@ -341,6 +342,7 @@ class MemoryRuntime:
         self,
         *,
         decision: RuntimePolicyDecision,
+        runtime_input: RuntimeInput,
         state: RuntimeState,
         session_id: str,
         estimated_tokens: int,
@@ -378,6 +380,17 @@ class MemoryRuntime:
                 "risk_level": classify_token_pressure(estimated_tokens, token_budget),
             },
             "state": state.to_dict(),
+            "context_compile": self._build_context_compile_debug(
+                runtime_input=runtime_input,
+                decision=decision,
+                state=state,
+                estimated_tokens=estimated_tokens,
+                token_budget=token_budget,
+                recent_turn_count=recent_turn_count,
+                file_memories=file_memories,
+                retrieval_pack=retrieval_pack,
+                checkpoint=checkpoint,
+            ),
             "sources": {
                 "checkpoint_id": checkpoint.get("checkpoint_id") if checkpoint else None,
                 "recent_turn_count": recent_turn_count,
@@ -399,6 +412,82 @@ class MemoryRuntime:
             "events": events.names(),
             "event_details": events.to_dicts(),
         }
+
+    def _build_context_compile_debug(
+        self,
+        *,
+        runtime_input: RuntimeInput,
+        decision: RuntimePolicyDecision,
+        state: RuntimeState,
+        estimated_tokens: int,
+        token_budget: int,
+        recent_turn_count: int,
+        file_memories: List[Dict[str, str]],
+        retrieval_pack: Dict[str, Any],
+        checkpoint: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        retrieval_items = retrieval_pack.get("items") if isinstance(retrieval_pack, dict) else []
+        retrieval_intent = retrieval_pack.get("intent") if isinstance(retrieval_pack, dict) else {}
+        retrieval_kind = retrieval_intent.get("kind") if isinstance(retrieval_intent, dict) else None
+        retrieval_sources = sorted(
+            {str(item.get("source")) for item in retrieval_items or [] if isinstance(item, dict) and item.get("source")}
+        )
+        dirty_reasons = self._context_dirty_reasons(
+            runtime_input=runtime_input,
+            decision=decision,
+            file_memories=file_memories,
+            retrieval_items=retrieval_items if isinstance(retrieval_items, list) else [],
+            checkpoint=checkpoint,
+        )
+        append_only_fast_path = (
+            state.risk_level == "safe"
+            and not dirty_reasons
+            and not retrieval_items
+            and not decision.emergency_compaction
+            and not decision.load_checkpoint
+            and not decision.load_file_memory
+        )
+        return {
+            "version": "instrumentation_v0",
+            "stable_frame_cache_enabled": False,
+            "stable_frame_id": None,
+            "reused_stable_frame": False,
+            "dirty_reasons": dirty_reasons,
+            "append_only_fast_path_eligible": append_only_fast_path,
+            "append_only_fast_path_used": False,
+            "retrieval_mode": retrieval_kind or "none",
+            "retrieval_sources": retrieval_sources,
+            "estimated_tokens": estimated_tokens,
+            "token_budget": token_budget,
+            "recent_turn_count": recent_turn_count,
+            "note": "Instrumentation only; stable frame cache and turn-delta reuse are not implemented yet.",
+        }
+
+    def _context_dirty_reasons(
+        self,
+        *,
+        runtime_input: RuntimeInput,
+        decision: RuntimePolicyDecision,
+        file_memories: List[Dict[str, str]],
+        retrieval_items: List[Dict[str, Any]],
+        checkpoint: Optional[Dict[str, Any]],
+    ) -> List[str]:
+        reasons: List[str] = []
+        if checkpoint:
+            reasons.append("checkpoint_loaded")
+        if file_memories or decision.load_file_memory:
+            reasons.append("file_memory_loaded")
+        if retrieval_items:
+            reasons.append("query_dependent_retrieval")
+        if decision.emergency_compaction:
+            reasons.append("emergency_compaction")
+        if not runtime_input.model or not runtime_input.provider:
+            reasons.append("model_context_missing")
+        if runtime_input.token_budget <= 0:
+            reasons.append("token_budget_missing")
+        if not runtime_input.workspace_dir:
+            reasons.append("workspace_missing")
+        return reasons
 
     def _merge_finalize_debug(
         self,
@@ -449,16 +538,24 @@ class MemoryRuntime:
             return {"triggered": False, "episode_ids": [episode_payload["episode_id"]], "skipped_reason": "disabled"}
         try:
             if settings.MEMORY_FORMATION_BACKGROUND:
-                self.formation_jobs.schedule(
+                job = self.formation_jobs.schedule(
                     session_id=session_id,
                     episode_payload=episode_payload,
                     workspace_dir=workspace_dir,
                 )
-                events.add("memory_formation_scheduled", episode_id=episode_payload["episode_id"], background=True)
+                events.add(
+                    "memory_formation_queued",
+                    episode_id=episode_payload["episode_id"],
+                    background=True,
+                    job_id=job.job_id,
+                )
                 return {
                     "triggered": True,
                     "scheduled": True,
+                    "queued": True,
                     "background": True,
+                    "job_id": job.job_id,
+                    "job_type": job.job_type,
                     "episode_ids": [episode_payload["episode_id"]],
                 }
             job_result = await self.formation_jobs.run(

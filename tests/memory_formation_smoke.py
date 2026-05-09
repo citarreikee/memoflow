@@ -172,7 +172,9 @@ async def run_background_schedule_smoke() -> None:
             )
             formation = debug.get("memory_formation") or {}
             assert formation.get("scheduled") is True
-            assert "memory_formation_scheduled" in debug.get("events", [])
+            assert formation.get("queued") is True
+            assert formation.get("job_id")
+            assert "memory_formation_queued" in debug.get("events", [])
         finally:
             settings.MEMORY_FORMATION_ENABLED = previous_enabled
             settings.MEMORY_FORMATION_DRY_RUN = previous_dry_run

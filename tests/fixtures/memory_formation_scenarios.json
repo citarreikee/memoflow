@@ -1,0 +1,170 @@
+﻿[
+  {
+    "id": "explicit_background_decision",
+    "description": "An explicit architecture decision should become a project decision memory candidate.",
+    "episode": {
+      "episode_id": "ep_scenario_decision_1",
+      "session_id": "scenario-session",
+      "turn_index": 1,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Decision: memory formation must run in background workers, not inside the chat request."
+        },
+        {
+          "role": "assistant",
+          "content": "Acknowledged."
+        }
+      ]
+    },
+    "expected": {
+      "triggered": true,
+      "min_candidates": 1,
+      "max_candidates": 3,
+      "include_types": ["decision"],
+      "include_scopes": ["project"],
+      "must_include_text": ["background workers", "chat request"],
+      "must_not_include_text": ["Acknowledged"]
+    }
+  },
+  {
+    "id": "stable_user_preference",
+    "description": "A durable preference should become a user-scoped preference candidate.",
+    "episode": {
+      "episode_id": "ep_scenario_preference_1",
+      "session_id": "scenario-session",
+      "turn_index": 2,
+      "messages": [
+        {
+          "role": "user",
+          "content": "From now on, prefer concise validation summaries after smoke tests."
+        },
+        {
+          "role": "assistant",
+          "content": "I will keep validation summaries concise."
+        }
+      ]
+    },
+    "expected": {
+      "triggered": true,
+      "min_candidates": 1,
+      "max_candidates": 3,
+      "include_types": ["preference"],
+      "include_scopes": ["user"],
+      "must_include_text": ["prefer concise validation summaries"],
+      "must_not_include_text": []
+    }
+  },
+  {
+    "id": "project_default_off_rule",
+    "description": "A project rule should become a project-scoped rule candidate.",
+    "episode": {
+      "episode_id": "ep_scenario_rule_1",
+      "session_id": "scenario-session",
+      "turn_index": 3,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Rule: memory features must remain default-off unless explicitly enabled."
+        },
+        {
+          "role": "assistant",
+          "content": "That rule is clear."
+        }
+      ]
+    },
+    "expected": {
+      "triggered": true,
+      "min_candidates": 1,
+      "max_candidates": 3,
+      "include_types": ["project_rule"],
+      "include_scopes": ["project"],
+      "must_include_text": ["default-off", "explicitly enabled"],
+      "must_not_include_text": []
+    }
+  },
+  {
+    "id": "dependency_relation",
+    "description": "A dependency statement should become an entity relation candidate.",
+    "episode": {
+      "episode_id": "ep_scenario_relation_1",
+      "session_id": "scenario-session",
+      "turn_index": 4,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Storage depends on evidence links before retrieval can trust records."
+        },
+        {
+          "role": "assistant",
+          "content": "Understood."
+        }
+      ]
+    },
+    "expected": {
+      "triggered": true,
+      "min_candidates": 1,
+      "max_candidates": 3,
+      "include_types": ["entity_relation"],
+      "include_scopes": ["project"],
+      "must_include_text": ["Storage depends on evidence links"],
+      "must_not_include_text": []
+    }
+  },
+  {
+    "id": "temporary_style_instruction_not_memory",
+    "description": "A one-off style request without durable wording should not trigger memory formation.",
+    "episode": {
+      "episode_id": "ep_scenario_non_memory_1",
+      "session_id": "scenario-session",
+      "turn_index": 1,
+      "messages": [
+        {
+          "role": "user",
+          "content": "For this single reply, please answer in one sentence."
+        },
+        {
+          "role": "assistant",
+          "content": "Sure."
+        }
+      ]
+    },
+    "expected": {
+      "triggered": false,
+      "min_candidates": 0,
+      "max_candidates": 0,
+      "include_types": [],
+      "include_scopes": [],
+      "must_include_text": [],
+      "must_not_include_text": ["single reply"]
+    }
+  },
+  {
+    "id": "smalltalk_not_memory",
+    "description": "Ordinary smalltalk should not become long-term memory.",
+    "episode": {
+      "episode_id": "ep_scenario_non_memory_2",
+      "session_id": "scenario-session",
+      "turn_index": 2,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Thanks, that makes sense. Let's continue later."
+        },
+        {
+          "role": "assistant",
+          "content": "Anytime."
+        }
+      ]
+    },
+    "expected": {
+      "triggered": false,
+      "min_candidates": 0,
+      "max_candidates": 0,
+      "include_types": [],
+      "include_scopes": [],
+      "must_include_text": [],
+      "must_not_include_text": ["Thanks"]
+    }
+  }
+]

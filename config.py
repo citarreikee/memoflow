@@ -81,6 +81,7 @@ class Settings:
             "yes",
             "on",
         }
+        self.MEMORY_JOB_STALE_AFTER_SECONDS: int = int(os.getenv("MEMORY_JOB_STALE_AFTER_SECONDS", "1800"))
         self.MEMORY_STORAGE_ENABLED: bool = os.getenv("MEMORY_STORAGE_ENABLED", "false").strip().lower() in {
             "1",
             "true",

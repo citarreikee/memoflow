@@ -9,7 +9,12 @@ from config import settings
 from providers import deepseek, kimi, ollama
 from services.memory.formation.prompts import build_extraction_messages
 from services.memory.formation.quality import CandidateQualityReport, postprocess_candidates
-from services.memory.formation.schemas import MemoryCandidateLite, normalize_candidate
+from services.memory.formation.schemas import (
+    MemoryCandidateLite,
+    default_memory_layer,
+    default_storage_intent,
+    normalize_candidate,
+)
 
 
 EXPLICIT_MEMORY_MARKERS = (
@@ -301,6 +306,8 @@ def _candidate_from_sentence(sentence: str) -> MemoryCandidateLite | None:
         reason="Likely to affect future project or user-specific behavior.",
         stability=stability,
         candidate_id=f"cand_{uuid.uuid4().hex}",
+        memory_layer=default_memory_layer(memory_type),
+        storage_intent=default_storage_intent(memory_type, scope=scope),
     )
 
 

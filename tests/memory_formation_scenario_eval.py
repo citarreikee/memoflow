@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import sys
@@ -25,6 +25,8 @@ class ScenarioResult:
     candidate_count: int = 0
     candidate_types: List[str] = field(default_factory=list)
     candidate_scopes: List[str] = field(default_factory=list)
+    candidate_layers: List[str] = field(default_factory=list)
+    candidate_storage_intents: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -34,6 +36,8 @@ class ScenarioResult:
             "candidate_count": self.candidate_count,
             "candidate_types": self.candidate_types,
             "candidate_scopes": self.candidate_scopes,
+            "candidate_layers": self.candidate_layers,
+            "candidate_storage_intents": self.candidate_storage_intents,
         }
 
 
@@ -50,6 +54,8 @@ def evaluate_scenario(scenario: Dict[str, Any]) -> ScenarioResult:
     candidate_text = "\n".join(candidate.text for candidate in candidates).lower()
     candidate_types = [candidate.type for candidate in candidates]
     candidate_scopes = [candidate.scope for candidate in candidates]
+    candidate_layers = [candidate.memory_layer for candidate in candidates]
+    candidate_storage_intents = [candidate.storage_intent for candidate in candidates]
     errors: List[str] = []
 
     if triggered is not bool(expected.get("triggered")):
@@ -68,6 +74,12 @@ def evaluate_scenario(scenario: Dict[str, Any]) -> ScenarioResult:
     for scope in expected.get("include_scopes") or []:
         if scope not in candidate_scopes:
             errors.append(f"missing candidate scope {scope!r}; got {candidate_scopes!r}")
+    for layer in expected.get("include_layers") or []:
+        if layer not in candidate_layers:
+            errors.append(f"missing candidate layer {layer!r}; got {candidate_layers!r}")
+    for intent in expected.get("include_storage_intents") or []:
+        if intent not in candidate_storage_intents:
+            errors.append(f"missing storage intent {intent!r}; got {candidate_storage_intents!r}")
     for text in expected.get("must_include_text") or []:
         if str(text).lower() not in candidate_text:
             errors.append(f"missing text fragment {text!r}")
@@ -82,6 +94,8 @@ def evaluate_scenario(scenario: Dict[str, Any]) -> ScenarioResult:
         candidate_count=len(candidates),
         candidate_types=candidate_types,
         candidate_scopes=candidate_scopes,
+        candidate_layers=candidate_layers,
+        candidate_storage_intents=candidate_storage_intents,
     )
 
 

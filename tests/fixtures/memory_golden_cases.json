@@ -1,4 +1,4 @@
-﻿[
+[
   {
     "id": "stable_user_preference",
     "candidate": {
@@ -11,11 +11,16 @@
       "reason": "This should influence future response style for this user.",
       "stability": "stable"
     },
-    "evidence_episode_ids": ["ep_pref_1"],
+    "evidence_episode_ids": [
+      "ep_pref_1"
+    ],
     "expected": {
       "status": "planned",
       "canonical_store": "semantic_kv",
-      "projections_include": ["episode_log", "vector_projection"],
+      "projections_include": [
+        "episode_log",
+        "vector_projection"
+      ],
       "blocked_reasons_include": []
     }
   },
@@ -31,11 +36,16 @@
       "reason": "This controls safe project behavior across future sessions.",
       "stability": "stable"
     },
-    "evidence_episode_ids": ["ep_rule_1"],
+    "evidence_episode_ids": [
+      "ep_rule_1"
+    ],
     "expected": {
       "status": "planned",
       "canonical_store": "file_memory",
-      "projections_include": ["episode_log", "vector_projection"],
+      "projections_include": [
+        "episode_log",
+        "vector_projection"
+      ],
       "blocked_reasons_include": []
     }
   },
@@ -51,12 +61,19 @@
       "reason": "This is only safe for the current session, not a project file.",
       "stability": "evolving"
     },
-    "evidence_episode_ids": ["ep_rule_2"],
+    "evidence_episode_ids": [
+      "ep_rule_2"
+    ],
     "expected": {
       "status": "planned",
       "canonical_store": "semantic_kv",
-      "projections_include": ["episode_log", "vector_projection"],
-      "blocked_reasons_include": ["file_memory_scope_downgraded"]
+      "projections_include": [
+        "episode_log",
+        "vector_projection"
+      ],
+      "blocked_reasons_include": [
+        "file_memory_scope_downgraded"
+      ]
     }
   },
   {
@@ -71,11 +88,16 @@
       "reason": "This affects near-term roadmap decisions.",
       "stability": "evolving"
     },
-    "evidence_episode_ids": ["ep_decision_1"],
+    "evidence_episode_ids": [
+      "ep_decision_1"
+    ],
     "expected": {
       "status": "planned",
-      "canonical_store": "semantic_kv",
-      "projections_include": ["episode_log", "vector_projection"],
+      "canonical_store": "episode_log",
+      "projections_include": [
+        "episode_log",
+        "vector_projection"
+      ],
       "blocked_reasons_include": []
     }
   },
@@ -91,11 +113,15 @@
       "reason": "This helps continue the active project thread.",
       "stability": "temporary"
     },
-    "evidence_episode_ids": ["ep_state_1"],
+    "evidence_episode_ids": [
+      "ep_state_1"
+    ],
     "expected": {
       "status": "planned",
       "canonical_store": "semantic_kv",
-      "projections_include": ["episode_log"],
+      "projections_include": [
+        "episode_log"
+      ],
       "blocked_reasons_include": []
     }
   },
@@ -111,11 +137,15 @@
       "reason": "Explicit depends_on relation for graph traversal.",
       "stability": "evolving"
     },
-    "evidence_episode_ids": ["ep_relation_1"],
+    "evidence_episode_ids": [
+      "ep_relation_1"
+    ],
     "expected": {
       "status": "planned",
       "canonical_store": "relation_graph",
-      "projections_include": ["episode_log"],
+      "projections_include": [
+        "episode_log"
+      ],
       "blocked_reasons_include": []
     }
   },
@@ -131,12 +161,19 @@
       "reason": "The relation is vague and has no explicit predicate.",
       "stability": "evolving"
     },
-    "evidence_episode_ids": ["ep_relation_2"],
+    "evidence_episode_ids": [
+      "ep_relation_2"
+    ],
     "expected": {
       "status": "blocked",
       "canonical_store": null,
-      "projections_include": ["episode_log"],
-      "blocked_reasons_include": ["graph_relation_missing", "canonical_store_missing"]
+      "projections_include": [
+        "episode_log"
+      ],
+      "blocked_reasons_include": [
+        "graph_relation_missing",
+        "canonical_store_missing"
+      ]
     }
   },
   {
@@ -151,12 +188,16 @@
       "reason": "Low future utility.",
       "stability": "temporary"
     },
-    "evidence_episode_ids": ["ep_chatter_1"],
+    "evidence_episode_ids": [
+      "ep_chatter_1"
+    ],
     "expected": {
       "status": "noop",
       "canonical_store": null,
       "projections_include": [],
-      "blocked_reasons_include": ["low_importance"]
+      "blocked_reasons_include": [
+        "low_importance"
+      ]
     }
   },
   {
@@ -171,12 +212,18 @@
       "reason": "Sensitive credentials must not be written to memory.",
       "stability": "stable"
     },
-    "evidence_episode_ids": ["ep_sensitive_1"],
+    "evidence_episode_ids": [
+      "ep_sensitive_1"
+    ],
     "expected": {
       "status": "blocked",
       "canonical_store": "semantic_kv",
-      "projections_include": ["episode_log"],
-      "blocked_reasons_include": ["sensitive_content"]
+      "projections_include": [
+        "episode_log"
+      ],
+      "blocked_reasons_include": [
+        "sensitive_content"
+      ]
     }
   },
   {
@@ -191,12 +238,19 @@
       "reason": "This is temporary and should not become stable user memory.",
       "stability": "temporary"
     },
-    "evidence_episode_ids": ["ep_temp_1"],
+    "evidence_episode_ids": [
+      "ep_temp_1"
+    ],
     "expected": {
       "status": "blocked",
       "canonical_store": "semantic_kv",
-      "projections_include": ["episode_log", "vector_projection"],
-      "blocked_reasons_include": ["temporary_memory"]
+      "projections_include": [
+        "episode_log",
+        "vector_projection"
+      ],
+      "blocked_reasons_include": [
+        "temporary_memory"
+      ]
     }
   },
   {
@@ -214,9 +268,14 @@
     "evidence_episode_ids": [],
     "expected": {
       "status": "blocked",
-      "canonical_store": "semantic_kv",
-      "projections_include": ["episode_log", "vector_projection"],
-      "blocked_reasons_include": ["evidence_missing"]
+      "canonical_store": "episode_log",
+      "projections_include": [
+        "episode_log",
+        "vector_projection"
+      ],
+      "blocked_reasons_include": [
+        "evidence_missing"
+      ]
     }
   },
   {
@@ -231,12 +290,16 @@
       "reason": "No durable future utility.",
       "stability": "unknown"
     },
-    "evidence_episode_ids": ["ep_non_memory_1"],
+    "evidence_episode_ids": [
+      "ep_non_memory_1"
+    ],
     "expected": {
       "status": "noop",
       "canonical_store": null,
       "projections_include": [],
-      "blocked_reasons_include": ["candidate_noop"]
+      "blocked_reasons_include": [
+        "candidate_noop"
+      ]
     }
   }
 ]

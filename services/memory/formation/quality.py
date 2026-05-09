@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
@@ -106,6 +106,10 @@ def _clean_candidate(candidate: MemoryCandidateLite, stats: _MutableQualityStats
         reason=reason,
         stability=candidate.stability,
         candidate_id=candidate.candidate_id,
+        memory_layer=candidate.memory_layer,
+        storage_intent=candidate.storage_intent,
+        evidence_policy=candidate.evidence_policy,
+        lifecycle_hint=candidate.lifecycle_hint,
     )
 
 

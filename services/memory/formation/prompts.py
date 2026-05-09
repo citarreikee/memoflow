@@ -9,7 +9,7 @@ def build_extraction_messages(episode: Dict[str, Any], *, max_candidates: int) -
         "You are a memory formation sidecar for Memoflow. "
         "Your job is to extract lightweight memory candidates from one completed episode. "
         "You may include a brief natural-language note, but your response must contain exactly one JSON object or JSON array fragment that the caller can parse. "
-        "Do not plan storage, IDs, graph edges, TTL, database tables, retrieval, or prompt injection. "
+        "Classify the memory layer and storage intent, but do not write storage, generate IDs, create graph edges, TTLs, database rows, retrieval plans, or prompt injection. "
         "Prefer NOOP or an empty candidates list when unsure. Do not infer hidden preferences from one ambiguous turn. "
         "Avoid sensitive personal data unless explicitly necessary for task continuity."
     )
@@ -23,6 +23,10 @@ def build_extraction_messages(episode: Dict[str, Any], *, max_candidates: int) -
                 "importance": "number from 0.0 to 1.0",
                 "reason": "one short sentence",
                 "stability": "temporary|evolving|stable|unknown",
+                "memory_layer": "raw|event|state|semantic|insight|relation|file|non_memory",
+                "storage_intent": "episode_log|state_kv|semantic_kv|vector_projection|relation_graph|dag|file_memory|review_queue|none",
+                "evidence_policy": "required|multi_evidence_preferred|review_required|none",
+                "lifecycle_hint": "normal|volatile|reinforce|supersedes|archive_after_task|review_before_apply",
             }
         ]
     }
@@ -36,6 +40,8 @@ def build_extraction_messages(episode: Dict[str, Any], *, max_candidates: int) -
             "- Candidate text must be specific, short, and evidence-backed by this episode.",
             "- Use non_memory/NOOP or [] for greetings, vague chatter, or unsupported inferences.",
             "- Use entity_relation only for explicit predicates such as depends_on, blocks, supersedes, contradicts, or derived_from.",
+            "- memory_layer means what kind of memory this is; storage_intent is only a routing hint for later deterministic planners.",
+            "- Prefer state/state_kv for active task status, event/episode_log for decisions, semantic/semantic_kv for durable facts or preferences, relation/relation_graph for explicit predicates, and file/file_memory for project rules/procedures that should become file-backed guidance.",
             "Episode evidence:",
             _render_episode(episode),
         ]

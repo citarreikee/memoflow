@@ -20,7 +20,80 @@ MEMORY_TYPES = {
 MEMORY_ACTIONS = {"ADD", "UPDATE", "DELETE", "NOOP"}
 MEMORY_SCOPES = {"session", "user", "project", "workspace"}
 MEMORY_STABILITY = {"temporary", "evolving", "stable", "unknown"}
+
+# Memory layer describes what kind of thing the candidate is before any concrete
+# storage backend is chosen. It is the bridge between "what deserves memory" and
+# the later storage router design.
+MEMORY_LAYERS = {
+    "raw",
+    "event",
+    "state",
+    "semantic",
+    "insight",
+    "relation",
+    "file",
+    "non_memory",
+}
+
+# Storage intent is a routing hint, not a guarantee that the corresponding
+# backend exists today. Current write plans still validate against implemented
+# scaffold stores before anything can be applied.
+STORAGE_INTENTS = {
+    "auto",
+    "episode_log",
+    "state_kv",
+    "semantic_kv",
+    "vector_projection",
+    "relation_graph",
+    "dag",
+    "file_memory",
+    "review_queue",
+    "none",
+}
+
+EVIDENCE_POLICIES = {
+    "required",
+    "multi_evidence_preferred",
+    "review_required",
+    "none",
+}
+
+LIFECYCLE_HINTS = {
+    "normal",
+    "volatile",
+    "reinforce",
+    "supersedes",
+    "archive_after_task",
+    "review_before_apply",
+}
+
 PLAN_STATUSES = {"planned", "blocked", "noop", "needs_review"}
+
+TYPE_DEFAULT_LAYERS = {
+    "preference": "semantic",
+    "profile_fact": "semantic",
+    "project_rule": "file",
+    "procedure": "file",
+    "decision": "event",
+    "task_state": "state",
+    "entity_relation": "relation",
+    "episodic_event": "event",
+    "embedding_hint": "semantic",
+    "non_memory": "non_memory",
+}
+
+TYPE_DEFAULT_STORAGE_INTENTS = {
+    "preference": "semantic_kv",
+    "profile_fact": "semantic_kv",
+    "project_rule": "file_memory",
+    "procedure": "file_memory",
+    "decision": "episode_log",
+    "task_state": "state_kv",
+    "entity_relation": "relation_graph",
+    "episodic_event": "episode_log",
+    "embedding_hint": "vector_projection",
+    "non_memory": "none",
+}
 
 
 @dataclass
@@ -33,6 +106,10 @@ class MemoryCandidateLite:
     reason: str
     stability: str = "unknown"
     candidate_id: Optional[str] = None
+    memory_layer: str = "semantic"
+    storage_intent: str = "auto"
+    evidence_policy: str = "required"
+    lifecycle_hint: str = "normal"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -79,6 +156,27 @@ def normalize_candidate(raw: Dict[str, Any], *, fallback_id: str) -> MemoryCandi
     if stability not in MEMORY_STABILITY:
         stability = "unknown"
     candidate_id = str(raw.get("candidate_id") or fallback_id).strip() or fallback_id
+
+    default_layer = default_memory_layer(memory_type)
+    memory_layer = str(raw.get("memory_layer") or default_layer).strip()
+    if memory_layer not in MEMORY_LAYERS:
+        memory_layer = default_layer
+
+    default_intent = default_storage_intent(memory_type, scope=scope)
+    storage_intent = str(raw.get("storage_intent") or default_intent).strip()
+    if storage_intent not in STORAGE_INTENTS:
+        storage_intent = default_intent
+    if storage_intent == "auto":
+        storage_intent = default_intent
+
+    evidence_policy = str(raw.get("evidence_policy") or "required").strip()
+    if evidence_policy not in EVIDENCE_POLICIES:
+        evidence_policy = "required"
+
+    lifecycle_hint = str(raw.get("lifecycle_hint") or "normal").strip()
+    if lifecycle_hint not in LIFECYCLE_HINTS:
+        lifecycle_hint = "normal"
+
     return MemoryCandidateLite(
         text=text,
         type=memory_type,
@@ -88,5 +186,20 @@ def normalize_candidate(raw: Dict[str, Any], *, fallback_id: str) -> MemoryCandi
         reason=reason,
         stability=stability,
         candidate_id=candidate_id,
+        memory_layer=memory_layer,
+        storage_intent=storage_intent,
+        evidence_policy=evidence_policy,
+        lifecycle_hint=lifecycle_hint,
     )
 
+
+def default_memory_layer(memory_type: str) -> str:
+    return TYPE_DEFAULT_LAYERS.get(memory_type, "non_memory")
+
+
+def default_storage_intent(memory_type: str, *, scope: str) -> str:
+    if memory_type == "project_rule" and scope in {"session", "user"}:
+        return "semantic_kv"
+    if memory_type == "procedure" and scope in {"session", "user"}:
+        return "semantic_kv"
+    return TYPE_DEFAULT_STORAGE_INTENTS.get(memory_type, "none")

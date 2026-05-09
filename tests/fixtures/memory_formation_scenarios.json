@@ -1,4 +1,4 @@
-﻿[
+[
   {
     "id": "explicit_background_decision",
     "description": "An explicit architecture decision should become a project decision memory candidate.",
@@ -21,10 +21,25 @@
       "triggered": true,
       "min_candidates": 1,
       "max_candidates": 3,
-      "include_types": ["decision"],
-      "include_scopes": ["project"],
-      "must_include_text": ["background workers", "chat request"],
-      "must_not_include_text": ["Acknowledged"]
+      "include_types": [
+        "decision"
+      ],
+      "include_scopes": [
+        "project"
+      ],
+      "must_include_text": [
+        "background workers",
+        "chat request"
+      ],
+      "must_not_include_text": [
+        "Acknowledged"
+      ],
+      "include_layers": [
+        "event"
+      ],
+      "include_storage_intents": [
+        "episode_log"
+      ]
     }
   },
   {
@@ -49,10 +64,22 @@
       "triggered": true,
       "min_candidates": 1,
       "max_candidates": 3,
-      "include_types": ["preference"],
-      "include_scopes": ["user"],
-      "must_include_text": ["prefer concise validation summaries"],
-      "must_not_include_text": []
+      "include_types": [
+        "preference"
+      ],
+      "include_scopes": [
+        "user"
+      ],
+      "must_include_text": [
+        "prefer concise validation summaries"
+      ],
+      "must_not_include_text": [],
+      "include_layers": [
+        "semantic"
+      ],
+      "include_storage_intents": [
+        "semantic_kv"
+      ]
     }
   },
   {
@@ -77,10 +104,23 @@
       "triggered": true,
       "min_candidates": 1,
       "max_candidates": 3,
-      "include_types": ["project_rule"],
-      "include_scopes": ["project"],
-      "must_include_text": ["default-off", "explicitly enabled"],
-      "must_not_include_text": []
+      "include_types": [
+        "project_rule"
+      ],
+      "include_scopes": [
+        "project"
+      ],
+      "must_include_text": [
+        "default-off",
+        "explicitly enabled"
+      ],
+      "must_not_include_text": [],
+      "include_layers": [
+        "file"
+      ],
+      "include_storage_intents": [
+        "file_memory"
+      ]
     }
   },
   {
@@ -105,10 +145,22 @@
       "triggered": true,
       "min_candidates": 1,
       "max_candidates": 3,
-      "include_types": ["entity_relation"],
-      "include_scopes": ["project"],
-      "must_include_text": ["Storage depends on evidence links"],
-      "must_not_include_text": []
+      "include_types": [
+        "entity_relation"
+      ],
+      "include_scopes": [
+        "project"
+      ],
+      "must_include_text": [
+        "Storage depends on evidence links"
+      ],
+      "must_not_include_text": [],
+      "include_layers": [
+        "relation"
+      ],
+      "include_storage_intents": [
+        "relation_graph"
+      ]
     }
   },
   {
@@ -136,7 +188,11 @@
       "include_types": [],
       "include_scopes": [],
       "must_include_text": [],
-      "must_not_include_text": ["single reply"]
+      "must_not_include_text": [
+        "single reply"
+      ],
+      "include_layers": [],
+      "include_storage_intents": []
     }
   },
   {
@@ -164,7 +220,11 @@
       "include_types": [],
       "include_scopes": [],
       "must_include_text": [],
-      "must_not_include_text": ["Thanks"]
+      "must_not_include_text": [
+        "Thanks"
+      ],
+      "include_layers": [],
+      "include_storage_intents": []
     }
   }
 ]

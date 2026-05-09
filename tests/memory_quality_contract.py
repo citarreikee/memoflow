@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import sys
@@ -56,6 +56,10 @@ def test_normalization_clamps_unsafe_values() -> None:
             "importance": 9,
             "reason": "test",
             "stability": "forever",
+            "memory_layer": "everything",
+            "storage_intent": "black_hole",
+            "evidence_policy": "trust_me",
+            "lifecycle_hint": "forever",
         },
         fallback_id="cand_normalized",
     )
@@ -65,6 +69,10 @@ def test_normalization_clamps_unsafe_values() -> None:
     assert candidate.action == "NOOP"
     assert candidate.importance == 1.0
     assert candidate.stability == "unknown"
+    assert candidate.memory_layer == "non_memory"
+    assert candidate.storage_intent == "none"
+    assert candidate.evidence_policy == "required"
+    assert candidate.lifecycle_hint == "normal"
 
 
 def _message(case: Dict[str, Any], field: str, expected: Any, actual: Any) -> str:

@@ -65,18 +65,21 @@ async def plan_memory_integration_with_llm(
     provider = _resolve_provider()
     model = _resolve_model(provider)
     prompt_candidate = _candidate_prompt_view(candidate)
-    prompt_memories = [_existing_prompt_view(index, memory) for index, memory in enumerate(existing_memories)]
+    selected_memories = select_existing_memories_for_llm(candidate, existing_memories)
+    prompt_memories = [_existing_prompt_view(index, memory) for index, memory in selected_memories]
     messages = build_integration_messages(prompt_candidate, prompt_memories)
     try:
         raw_text = await _run_completion(provider=provider, model=model, messages=messages)
         payload = parse_integration_json(raw_text)
         decision = normalize_integration_decision(payload)
-        plan = decision_to_integration_plan(candidate, existing_memories=existing_memories, decision=decision)
+        plan = decision_to_integration_plan(candidate, existing_memories=selected_memories, decision=decision)
         return plan, {
             "mode": "llm_minimal_integration",
             "provider": provider,
             "model": model,
             "decision": decision.to_dict(),
+            "selected_existing_count": len(selected_memories),
+            "selected_existing_memory_ids": [memory.memory_id for memory in selected_memories],
             "raw_preview": raw_text[:1200],
         }
     except Exception as exc:
@@ -177,6 +180,114 @@ def decision_to_integration_plan(
         blocked_reasons=blocked_reasons,
         needs_review_reasons=review_reasons,
     )
+
+
+MAX_LLM_RELATED_MEMORIES = 8
+MAX_LLM_MEMORY_CHARS = 500
+MAX_LLM_TOTAL_MEMORY_CHARS = 2400
+
+
+def select_existing_memories_for_llm(
+    candidate: MemoryCandidateLite,
+    existing_memories: List[ExistingMemorySnapshot],
+    *,
+    max_items: int = MAX_LLM_RELATED_MEMORIES,
+    max_total_chars: int = MAX_LLM_TOTAL_MEMORY_CHARS,
+) -> List[ExistingMemorySnapshot]:
+    """Choose the smallest useful memory set for semantic integration.
+
+    The neighborhood repository can return implementation-oriented snapshots with
+    exact, lexical, and compatible matches. The LLM should not see every snapshot;
+    it only needs enough content to judge duplicate/update/conflict/relation.
+    """
+
+    active = [memory for memory in existing_memories if memory.status == "active"]
+    ranked = sorted(active, key=lambda memory: _llm_relevance_score(candidate, memory), reverse=True)
+    selected: List[ExistingMemorySnapshot] = []
+    seen_texts: set[str] = set()
+    total_chars = 0
+    for memory in ranked:
+        if not _is_candidate_relevant_for_llm(candidate, memory):
+            continue
+        if _llm_relevance_score(candidate, memory) <= 0:
+            continue
+        normalized_text = " ".join((memory.text or "").lower().split())
+        if not normalized_text or normalized_text in seen_texts:
+            continue
+        clipped = _clip_for_llm(memory.text, MAX_LLM_MEMORY_CHARS)
+        if total_chars + len(clipped) > max_total_chars:
+            break
+        selected.append(
+            ExistingMemorySnapshot(
+                memory_id=memory.memory_id,
+                type=memory.type,
+                scope=memory.scope,
+                text=clipped,
+                status=memory.status,
+                namespace=memory.namespace,
+                key=memory.key,
+                confidence=memory.confidence,
+                version=memory.version,
+                created_at=memory.created_at,
+                updated_at=memory.updated_at,
+                source_plan_id=memory.source_plan_id,
+                supersedes_memory_id=memory.supersedes_memory_id,
+                superseded_by_memory_id=memory.superseded_by_memory_id,
+                evidence_episode_ids=list(memory.evidence_episode_ids),
+                payload=dict(memory.payload),
+                match=dict(memory.match),
+            )
+        )
+        seen_texts.add(normalized_text)
+        total_chars += len(clipped)
+        if len(selected) >= max_items:
+            break
+    return selected
+
+
+def _is_candidate_relevant_for_llm(candidate: MemoryCandidateLite, memory: ExistingMemorySnapshot) -> bool:
+    if str(memory.match.get("path", "")) == "exact_key":
+        return True
+    try:
+        if float(memory.match.get("score", 0.0)) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    if memory.type == candidate.type and memory.scope == candidate.scope:
+        return True
+    candidate_tokens = _tokens(candidate.text)
+    memory_tokens = _tokens(memory.text)
+    return bool(candidate_tokens and memory_tokens and candidate_tokens & memory_tokens)
+
+
+def _llm_relevance_score(candidate: MemoryCandidateLite, memory: ExistingMemorySnapshot) -> float:
+    score = float(memory.match.get("score", 0.0)) if isinstance(memory.match, dict) else 0.0
+    if memory.type == candidate.type:
+        score += 0.35
+    if memory.scope == candidate.scope:
+        score += 0.20
+    if memory.status == "active":
+        score += 0.10
+    if str(memory.match.get("path", "")) == "exact_key":
+        score += 1.0
+    candidate_tokens = _tokens(candidate.text)
+    memory_tokens = _tokens(memory.text)
+    if candidate_tokens and memory_tokens:
+        score += len(candidate_tokens & memory_tokens) / len(candidate_tokens | memory_tokens)
+    return score
+
+
+def _tokens(text: str) -> set[str]:
+    import re
+
+    return {token for token in re.findall(r"[a-zA-Z0-9_\-]+", (text or "").lower()) if len(token) >= 2}
+
+
+def _clip_for_llm(text: str, max_chars: int) -> str:
+    compact = " ".join((text or "").split())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max(0, max_chars - 3)].rstrip() + "..."
 
 
 def _candidate_prompt_view(candidate: MemoryCandidateLite) -> Dict[str, Any]:

@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 from config import settings
 from services.memory.formation.integration_llm import plan_memory_integration_with_llm
 from services.memory.formation.integration_planner import plan_memory_integration
+from services.memory.formation.integration_schemas import MemoryIntegrationPlan
+from services.memory.formation.mutation_planner import build_write_plans
 from services.memory.formation.neighborhood import MemoryNeighborhoodRepository
 from services.memory.formation.pipeline import MemoryFormationResult, run_memory_formation_dry_run
 from services.memory.formation.shape_planner import plan_storage_shape
@@ -50,6 +52,20 @@ class MemoryFormationJobRunner:
         workspace_dir: Optional[str] = None,
     ) -> MemoryFormationJobResult:
         formation = await run_memory_formation_dry_run(episode_payload)
+        storage_debug: Optional[Dict[str, Any]] = None
+        apply_result: Optional[MemoryApplyResult] = None
+        integration_debug: Optional[Dict[str, Any]] = None
+        if settings.MEMORY_STORAGE_ENABLED:
+            integration_debug, integration_plans = await self._plan_integrations(
+                session_id=session_id,
+                workspace_dir=workspace_dir,
+                formation=formation,
+            )
+            formation.plans = build_write_plans(
+                formation.candidates,
+                evidence_episode_ids=formation.episode_ids,
+                integration_plans=integration_plans,
+            )
         write_result: Optional[DryRunWriteResult] = None
         if settings.MEMORY_FORMATION_DRY_RUN and formation.plans:
             write_result = write_dry_run_outputs(
@@ -57,15 +73,7 @@ class MemoryFormationJobRunner:
                 session_id=session_id,
                 plans=formation.plans,
             )
-        storage_debug: Optional[Dict[str, Any]] = None
-        apply_result: Optional[MemoryApplyResult] = None
-        integration_debug: Optional[Dict[str, Any]] = None
         if settings.MEMORY_STORAGE_ENABLED:
-            integration_debug = await self._plan_integrations(
-                session_id=session_id,
-                workspace_dir=workspace_dir,
-                formation=formation,
-            )
             storage_debug, apply_result = self._persist_to_sqlite(
                 session_id=session_id,
                 episode_payload=episode_payload,
@@ -112,12 +120,13 @@ class MemoryFormationJobRunner:
         session_id: str,
         workspace_dir: Optional[str],
         formation: MemoryFormationResult,
-    ) -> Dict[str, Any]:
+    ) -> tuple[Dict[str, Any], List[MemoryIntegrationPlan]]:
         if not formation.candidates:
-            return {"enabled": True, "candidate_count": 0, "plans": []}
+            return {"enabled": True, "candidate_count": 0, "plans": []}, []
         store = MemorySQLiteStore.from_settings()
         repository = MemoryNeighborhoodRepository(store)
         plans: List[Dict[str, Any]] = []
+        integration_plans: List[MemoryIntegrationPlan] = []
         action_counts: Dict[str, int] = {}
         snapshot_count = 0
         for candidate in formation.candidates:
@@ -142,6 +151,12 @@ class MemoryFormationJobRunner:
                     integration_mode = "llm_minimal_integration"
             else:
                 integration = rule_integration
+            integration_plans.append(integration)
+            routed_shape = plan_storage_shape(
+                candidate,
+                write_strategy=integration.write_strategy,
+                memory_layers=integration.memory_layers,
+            )
             action_counts[integration.action] = action_counts.get(integration.action, 0) + 1
             snapshot_count += len(snapshots)
             plan_debug = {
@@ -153,11 +168,7 @@ class MemoryFormationJobRunner:
                 "snapshots": [snapshot.to_dict() for snapshot in snapshots],
                 "rule_plan": rule_integration.to_dict(),
                 "plan": integration.to_dict(),
-                "storage_route_preview": plan_storage_shape(
-                    candidate,
-                    write_strategy=integration.write_strategy,
-                    memory_layers=integration.memory_layers,
-                ).to_dict(),
+                "storage_route_preview": routed_shape.to_dict(),
             }
             if llm_debug:
                 plan_debug["llm"] = llm_debug
@@ -168,7 +179,7 @@ class MemoryFormationJobRunner:
             "snapshot_count": snapshot_count,
             "action_counts": action_counts,
             "plans": plans,
-        }
+        }, integration_plans
 
     def _persist_to_sqlite(
         self,

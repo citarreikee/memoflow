@@ -161,6 +161,13 @@ class MemoryWritePlan:
     type: str = "non_memory"
     text: str = ""
     reason: str = ""
+    integration_action: Optional[str] = None
+    write_strategy: Optional[str] = None
+    target_memory_id: Optional[str] = None
+    related_memory_ids: List[str] = field(default_factory=list)
+    graph_relations: List[Dict[str, str]] = field(default_factory=list)
+    memory_layers: List[str] = field(default_factory=list)
+    needs_review_reasons: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

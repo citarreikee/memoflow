@@ -86,12 +86,12 @@ class MemoryWriteApplier:
             result.file_suggestions += 1
 
         if plan.canonical_store == "relation_graph" or "relation_graph" in plan.projections:
-            if has_explicit_graph_relation(_PlanCandidateAdapter(plan)):
-                relation_type = _infer_relation_type(plan.text)
+            for relation in _relations_for_plan(plan):
                 self.store.insert_graph_edge(
                     memory_id=memory_id,
                     episode_id=plan.evidence_episode_ids[0],
-                    relation_type=relation_type,
+                    relation_type=relation["relation_type"],
+                    target_memory_id=relation.get("target_memory_id"),
                     plan=plan,
                 )
                 result.graph_edges += 1
@@ -129,7 +129,12 @@ class MemoryWriteApplier:
         status = "active" if plan.status == "planned" else "needs_review"
         supersedes_memory_id = None
         version = 1
-        if existing and plan.action in {"ADD", "UPDATE"}:
+        if plan.target_memory_id and plan.action in {"MERGE", "UPDATE", "SUPERSEDE"}:
+            supersedes_memory_id = plan.target_memory_id
+            target = self.store.get_record(memory_id=plan.target_memory_id)
+            if target:
+                version = int(target["version"]) + 1
+        elif existing and plan.action in {"ADD", "UPDATE", "MERGE", "SUPERSEDE"}:
             supersedes_memory_id = existing["memory_id"]
             version = int(existing["version"]) + 1
         record = self.store.insert_memory_record(
@@ -155,6 +160,7 @@ class MemoryWriteApplier:
                 memory_id=record["memory_id"],
                 episode_id=plan.evidence_episode_ids[0],
                 relation_type="supersedes",
+                target_memory_id=supersedes_memory_id,
                 plan=plan,
             )
             result.graph_edges += 1
@@ -192,6 +198,22 @@ class _PlanCandidateAdapter:
         self.reason = plan.reason
 
 
+def _relations_for_plan(plan: MemoryWritePlan) -> List[Dict[str, Optional[str]]]:
+    relations = [
+        {
+            "relation_type": str(relation.get("relation_type") or "derived_from"),
+            "target_memory_id": str(relation.get("target_memory_id") or "").strip() or None,
+        }
+        for relation in plan.graph_relations
+        if isinstance(relation, dict)
+    ]
+    if relations:
+        return relations
+    if has_explicit_graph_relation(_PlanCandidateAdapter(plan)):
+        return [{"relation_type": _infer_relation_type(plan.text), "target_memory_id": plan.target_memory_id}]
+    return []
+
+
 def _infer_relation_type(text: str) -> str:
     lowered = (text or "").lower()
     markers = {
@@ -207,4 +229,3 @@ def _infer_relation_type(text: str) -> str:
         if any(value in lowered for value in values):
             return relation_type
     return "derived_from"
-

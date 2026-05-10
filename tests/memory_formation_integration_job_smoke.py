@@ -89,6 +89,7 @@ async def test_queued_formation_emits_integration_plan() -> None:
         assert completed is not None
         assert completed.status == SUCCEEDED
         integration = completed.result.get("memory_integration") or {}
+        write_plans = completed.result.get("plans") or []
         plans = integration.get("plans") or []
         actions = [entry.get("plan", {}).get("action") for entry in plans]
 
@@ -99,6 +100,11 @@ async def test_queued_formation_emits_integration_plan() -> None:
         supersede = next(entry for entry in plans if entry.get("plan", {}).get("action") == "SUPERSEDE")
         assert supersede.get("snapshot_count", 0) >= 1
         assert supersede["plan"].get("target_memory_id")
+        supersede_write_plan = next(plan for plan in write_plans if plan.get("integration_action") == "SUPERSEDE")
+        assert supersede_write_plan["action"] == "SUPERSEDE"
+        assert supersede_write_plan["write_strategy"] == "supersede_existing"
+        assert supersede_write_plan["target_memory_id"] == supersede["plan"].get("target_memory_id")
+        assert "relation_graph" in supersede_write_plan["projections"]
 
 
 def main() -> None:

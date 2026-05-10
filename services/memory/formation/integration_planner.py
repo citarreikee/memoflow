@@ -55,6 +55,8 @@ def plan_memory_integration(
                 target_memory_id=best_memory.memory_id,
                 related_memory_ids=[best_memory.memory_id],
                 suggested_text=candidate.text,
+                memory_layers=[candidate.memory_layer],
+                write_strategy="update_existing",
             )
         return MemoryIntegrationPlan(
             candidate_id=candidate.candidate_id or "",
@@ -76,6 +78,8 @@ def plan_memory_integration(
                 related_memory_ids=[target.memory_id],
                 graph_relations=[{"relation_type": "supersedes", "target_memory_id": target.memory_id}],
                 suggested_text=candidate.text,
+                memory_layers=[candidate.memory_layer],
+                write_strategy="supersede_existing",
             )
         return MemoryIntegrationPlan(
             candidate_id=candidate.candidate_id or "",
@@ -112,10 +116,12 @@ def plan_memory_integration(
             candidate_id=candidate.candidate_id or "",
             action="MERGE",
             confidence=round(best_score, 3),
-            rationale="Candidate overlaps an existing memory and should be merged or used as extra evidence.",
-            target_memory_id=best_memory.memory_id,
-            suggested_text=_merge_text(best_memory.text, candidate.text),
-        )
+                rationale="Candidate overlaps an existing memory and should be merged or used as extra evidence.",
+                target_memory_id=best_memory.memory_id,
+                suggested_text=_merge_text(best_memory.text, candidate.text),
+                memory_layers=[candidate.memory_layer],
+                write_strategy="merge_with_existing",
+            )
 
     relation_type, relation_target = _detect_relation(candidate.text, existing)
     if candidate.type == "entity_relation":
@@ -128,6 +134,8 @@ def plan_memory_integration(
                 target_memory_id=relation_target.memory_id,
                 related_memory_ids=[relation_target.memory_id],
                 graph_relations=[{"relation_type": relation_type, "target_memory_id": relation_target.memory_id}],
+                memory_layers=["relation"],
+                write_strategy="link_as_relation",
             )
         return MemoryIntegrationPlan(
             candidate_id=candidate.candidate_id or "",
@@ -152,6 +160,8 @@ def plan_memory_integration(
         confidence=round(candidate.importance, 3),
         rationale="No overlapping active memory found; candidate can be added if deterministic gates pass.",
         suggested_text=candidate.text,
+        memory_layers=[candidate.memory_layer],
+        write_strategy="add_new",
     )
 
 

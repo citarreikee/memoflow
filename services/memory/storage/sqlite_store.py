@@ -266,6 +266,11 @@ class MemorySQLiteStore:
             ).fetchone()
             return _row_to_dict(row) if row else None
 
+    def get_record(self, *, memory_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM memory_records WHERE memory_id = ?", (memory_id,)).fetchone()
+            return _row_to_dict(row) if row else None
+
     def search_active_records(
         self,
         *,
@@ -480,6 +485,7 @@ class MemorySQLiteStore:
         episode_id: Optional[str],
         relation_type: str,
         plan: MemoryWritePlan,
+        target_memory_id: Optional[str] = None,
     ) -> str:
         edge_id = f"edge_{uuid.uuid4().hex}"
         with self._connect() as conn:
@@ -493,7 +499,7 @@ class MemorySQLiteStore:
                 (
                     edge_id,
                     memory_id,
-                    None,
+                    target_memory_id,
                     episode_id,
                     None,
                     relation_type,

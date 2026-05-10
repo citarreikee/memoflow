@@ -78,6 +78,8 @@ async def plan_memory_integration_with_llm(
             "provider": provider,
             "model": model,
             "decision": decision.to_dict(),
+            "prompt_candidate": prompt_candidate,
+            "prompt_related_existing_memories": prompt_memories,
             "selected_existing_count": len(selected_memories),
             "selected_existing_memory_ids": [memory.memory_id for memory in selected_memories],
             "raw_preview": raw_text[:1200],
@@ -89,7 +91,16 @@ async def plan_memory_integration_with_llm(
             confidence=0.0,
             rationale="LLM integration failed; fallback required.",
             needs_review_reasons=["llm_integration_failed"],
-        ), {"mode": "llm_minimal_integration", "provider": provider, "model": model, "error": str(exc)}
+        ), {
+            "mode": "llm_minimal_integration",
+            "provider": provider,
+            "model": model,
+            "prompt_candidate": prompt_candidate,
+            "prompt_related_existing_memories": prompt_memories,
+            "selected_existing_count": len(selected_memories),
+            "selected_existing_memory_ids": [memory.memory_id for memory in selected_memories],
+            "error": str(exc),
+        }
 
 
 def parse_integration_json(raw_text: str) -> Any:

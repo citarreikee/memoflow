@@ -173,6 +173,23 @@ class MemorySQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_memory_file_suggestions_status
                 ON memory_file_suggestions(session_id, status);
 
+                CREATE TABLE IF NOT EXISTS memory_review_items (
+                    review_id TEXT PRIMARY KEY,
+                    source_plan_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    target_memory_id TEXT,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT,
+                    payload_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_memory_review_items_status
+                ON memory_review_items(session_id, status, action);
+
                 CREATE TABLE IF NOT EXISTS memory_reindex_jobs (
                     job_id TEXT PRIMARY KEY,
                     memory_id TEXT,
@@ -548,6 +565,39 @@ class MemorySQLiteStore:
             )
         return suggestion_id
 
+    def insert_review_item(
+        self,
+        *,
+        session_id: str,
+        plan: MemoryWritePlan,
+        reason: str,
+        status: str = "pending_review",
+    ) -> str:
+        review_id = f"rev_{uuid.uuid4().hex}"
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_review_items (
+                    review_id, source_plan_id, session_id, scope, action, status, target_memory_id,
+                    reason, created_at, reviewed_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    review_id,
+                    plan.plan_id,
+                    session_id,
+                    plan.scope,
+                    plan.action,
+                    status,
+                    plan.target_memory_id,
+                    reason,
+                    utc_now(),
+                    None,
+                    json.dumps(plan.to_dict(), ensure_ascii=False),
+                ),
+            )
+        return review_id
+
     def insert_reindex_job(
         self,
         *,
@@ -589,6 +639,7 @@ class MemorySQLiteStore:
             "memory_vector_projections",
             "memory_graph_edges",
             "memory_file_suggestions",
+            "memory_review_items",
             "memory_reindex_jobs",
         }:
             raise ValueError(f"unsupported_table:{table}")

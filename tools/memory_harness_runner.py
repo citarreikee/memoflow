@@ -70,6 +70,7 @@ QUICK_SCRIPTS = [
     ("memory_formation_smoke", "formation", [sys.executable, "tests/memory_formation_smoke.py"]),
     ("memory_formation_integration_job_smoke", "formation_integration", [sys.executable, "tests/memory_formation_integration_job_smoke.py"]),
     ("memory_storage_smoke", "storage", [sys.executable, "tests/memory_storage_smoke.py"]),
+    ("memory_mutation_contract", "storage", [sys.executable, "tests/memory_mutation_contract.py"]),
     ("memory_retrieval_smoke", "retrieval", [sys.executable, "tests/memory_retrieval_smoke.py"]),
     ("memory_retrieval_scenario_eval", "retrieval", [sys.executable, "tests/memory_retrieval_scenario_eval.py"]),
     ("memory_compaction_scenario_eval", "runtime_compaction", [sys.executable, "tests/memory_compaction_scenario_eval.py"]),

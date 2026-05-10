@@ -16,6 +16,7 @@ class MemoryApplyResult:
     vector_projections: int = 0
     graph_edges: int = 0
     file_suggestions: int = 0
+    review_items: int = 0
     reindex_jobs: int = 0
     blocked_count: int = 0
     applied_plan_ids: List[str] = field(default_factory=list)
@@ -28,6 +29,7 @@ class MemoryApplyResult:
             "vector_projections": self.vector_projections,
             "graph_edges": self.graph_edges,
             "file_suggestions": self.file_suggestions,
+            "review_items": self.review_items,
             "reindex_jobs": self.reindex_jobs,
             "blocked_count": self.blocked_count,
             "applied_plan_ids": self.applied_plan_ids,
@@ -67,11 +69,135 @@ class MemoryWriteApplier:
             result.blocked_count += 1
             result.blocked_reasons.append("evidence_missing")
             return
-        if plan.status == "needs_review" and plan.canonical_store != "file_memory":
-            result.blocked_count += 1
-            result.blocked_reasons.append("needs_review_not_applied")
+        if plan.status == "needs_review" or plan.action in {"CONFLICT", "NEEDS_REVIEW"}:
+            self._apply_review_item(session_id=session_id, plan=plan, result=result)
             return
 
+        handlers = {
+            "ADD": self._apply_add,
+            "MERGE": self._apply_merge,
+            "UPDATE": self._apply_update,
+            "SUPERSEDE": self._apply_supersede,
+            "LINK": self._apply_link,
+            "DELETE": self._apply_delete,
+        }
+        handler = handlers.get(plan.action)
+        if handler is None:
+            result.blocked_count += 1
+            result.blocked_reasons.append(f"unsupported_plan_action:{plan.action}")
+            return
+        handler(session_id=session_id, workspace_dir=workspace_dir, plan=plan, result=result)
+        self.store.mark_plan_applied(plan_id=plan.plan_id)
+        result.applied_plan_ids.append(plan.plan_id)
+
+    def _apply_add(
+        self,
+        *,
+        session_id: str,
+        workspace_dir: Optional[str],
+        plan: MemoryWritePlan,
+        result: MemoryApplyResult,
+    ) -> None:
+        memory_id = self._apply_canonical_or_file(session_id=session_id, workspace_dir=workspace_dir, plan=plan, result=result)
+        self._apply_projections(memory_id=memory_id, plan=plan, result=result)
+
+    def _apply_merge(
+        self,
+        *,
+        session_id: str,
+        workspace_dir: Optional[str],
+        plan: MemoryWritePlan,
+        result: MemoryApplyResult,
+    ) -> None:
+        if not plan.target_memory_id:
+            self._block(result, "merge_target_missing")
+            return
+        memory_id = self._apply_canonical_or_file(session_id=session_id, workspace_dir=workspace_dir, plan=plan, result=result)
+        self._apply_projections(memory_id=memory_id, plan=plan, result=result)
+
+    def _apply_update(
+        self,
+        *,
+        session_id: str,
+        workspace_dir: Optional[str],
+        plan: MemoryWritePlan,
+        result: MemoryApplyResult,
+    ) -> None:
+        if not plan.target_memory_id:
+            self._block(result, "update_target_missing")
+            return
+        memory_id = self._apply_canonical_or_file(session_id=session_id, workspace_dir=workspace_dir, plan=plan, result=result)
+        self._apply_projections(memory_id=memory_id, plan=plan, result=result)
+
+    def _apply_supersede(
+        self,
+        *,
+        session_id: str,
+        workspace_dir: Optional[str],
+        plan: MemoryWritePlan,
+        result: MemoryApplyResult,
+    ) -> None:
+        if not plan.target_memory_id:
+            self._block(result, "supersede_target_missing")
+            return
+        memory_id = self._apply_canonical_or_file(session_id=session_id, workspace_dir=workspace_dir, plan=plan, result=result)
+        self._apply_projections(memory_id=memory_id, plan=plan, result=result)
+
+    def _apply_link(
+        self,
+        *,
+        session_id: str,
+        workspace_dir: Optional[str],
+        plan: MemoryWritePlan,
+        result: MemoryApplyResult,
+    ) -> None:
+        relations = _relations_for_plan(plan)
+        if not relations:
+            self._block(result, "link_relation_missing")
+            return
+        memory_id = None
+        if plan.canonical_store in {"semantic_kv", "episode_log", "relation_graph", "vector_projection"}:
+            memory_id = self._apply_canonical_record(
+                session_id=session_id,
+                workspace_dir=workspace_dir,
+                plan=plan,
+                result=result,
+            )
+        if plan.canonical_store == "file_memory":
+            self.store.insert_file_suggestion(session_id=session_id, workspace_dir=workspace_dir, plan=plan)
+            result.file_suggestions += 1
+        self._apply_graph_relations(memory_id=memory_id, plan=plan, result=result, relations=relations)
+        if "vector_projection" in plan.projections:
+            self._apply_vector_projection(memory_id=memory_id, plan=plan, result=result)
+
+    def _apply_delete(
+        self,
+        *,
+        session_id: str,
+        workspace_dir: Optional[str],
+        plan: MemoryWritePlan,
+        result: MemoryApplyResult,
+    ) -> None:
+        if not plan.target_memory_id:
+            self._block(result, "delete_target_missing")
+            return
+        self.store.mark_record_status(memory_id=plan.target_memory_id, status="deleted")
+
+    def _apply_review_item(self, *, session_id: str, plan: MemoryWritePlan, result: MemoryApplyResult) -> None:
+        reason = ";".join(plan.needs_review_reasons or plan.blocked_reasons or ["needs_review"])
+        self.store.insert_review_item(session_id=session_id, plan=plan, reason=reason)
+        self.store.mark_plan_applied(plan_id=plan.plan_id)
+        result.review_items += 1
+        result.applied_plan_ids.append(plan.plan_id)
+
+    def _apply_canonical_or_file(
+        self,
+        *,
+        session_id: str,
+        workspace_dir: Optional[str],
+        plan: MemoryWritePlan,
+        result: MemoryApplyResult,
+    ) -> Optional[str]:
         memory_id: Optional[str] = None
         if plan.canonical_store in {"semantic_kv", "episode_log", "relation_graph", "vector_projection"}:
             memory_id = self._apply_canonical_record(
@@ -84,36 +210,52 @@ class MemoryWriteApplier:
         if plan.canonical_store == "file_memory":
             self.store.insert_file_suggestion(session_id=session_id, workspace_dir=workspace_dir, plan=plan)
             result.file_suggestions += 1
+        return memory_id
 
+    def _apply_projections(self, *, memory_id: Optional[str], plan: MemoryWritePlan, result: MemoryApplyResult) -> None:
         if plan.canonical_store == "relation_graph" or "relation_graph" in plan.projections:
-            for relation in _relations_for_plan(plan):
-                self.store.insert_graph_edge(
-                    memory_id=memory_id,
-                    episode_id=plan.evidence_episode_ids[0],
-                    relation_type=relation["relation_type"],
-                    target_memory_id=relation.get("target_memory_id"),
-                    plan=plan,
-                )
-                result.graph_edges += 1
-                result.reindex_jobs += self._enqueue_job("refresh_graph", "graph_edge_created", memory_id=memory_id, plan=plan)
+            self._apply_graph_relations(memory_id=memory_id, plan=plan, result=result, relations=_relations_for_plan(plan))
 
         if plan.canonical_store == "vector_projection" or "vector_projection" in plan.projections:
-            projection_id = self.store.insert_vector_projection(
+            self._apply_vector_projection(memory_id=memory_id, plan=plan, result=result)
+
+    def _apply_graph_relations(
+        self,
+        *,
+        memory_id: Optional[str],
+        plan: MemoryWritePlan,
+        result: MemoryApplyResult,
+        relations: List[Dict[str, Optional[str]]],
+    ) -> None:
+        for relation in relations:
+            self.store.insert_graph_edge(
                 memory_id=memory_id,
                 episode_id=plan.evidence_episode_ids[0],
+                relation_type=relation["relation_type"] or "derived_from",
+                target_memory_id=relation.get("target_memory_id"),
                 plan=plan,
             )
-            result.vector_projections += 1
-            result.reindex_jobs += self._enqueue_job(
-                "embed_vector",
-                "vector_projection_created",
-                memory_id=memory_id,
-                projection_id=projection_id,
-                plan=plan,
-            )
+            result.graph_edges += 1
+            result.reindex_jobs += self._enqueue_job("refresh_graph", "graph_edge_created", memory_id=memory_id, plan=plan)
 
-        self.store.mark_plan_applied(plan_id=plan.plan_id)
-        result.applied_plan_ids.append(plan.plan_id)
+    def _apply_vector_projection(self, *, memory_id: Optional[str], plan: MemoryWritePlan, result: MemoryApplyResult) -> None:
+        projection_id = self.store.insert_vector_projection(
+            memory_id=memory_id,
+            episode_id=plan.evidence_episode_ids[0],
+            plan=plan,
+        )
+        result.vector_projections += 1
+        result.reindex_jobs += self._enqueue_job(
+            "embed_vector",
+            "vector_projection_created",
+            memory_id=memory_id,
+            projection_id=projection_id,
+            plan=plan,
+        )
+
+    def _block(self, result: MemoryApplyResult, reason: str) -> None:
+        result.blocked_count += 1
+        result.blocked_reasons.append(reason)
 
     def _apply_canonical_record(
         self,

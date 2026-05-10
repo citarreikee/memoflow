@@ -13,9 +13,9 @@ from services.memory.formation.extractor import (
     _split_sentences,
     parse_candidate_json,
 )
-from services.memory.formation.prompts import build_observation_messages
-from services.memory.formation.quality import postprocess_candidates
-from services.memory.formation.schemas import MemoryCandidateLite, MemoryObservation, normalize_observation
+from services.memory.formation.prompts import build_candidate_formation_messages, build_observation_messages
+from services.memory.formation.quality import CandidateQualityReport, postprocess_candidates
+from services.memory.formation.schemas import MemoryCandidateLite, MemoryObservation, normalize_candidate, normalize_observation
 
 
 MAX_OBSERVATIONS = 8
@@ -197,6 +197,56 @@ def _resolve_model(provider: str) -> str:
         return settings.SIDECAR_COMPACTION_MODEL or "qwen3:30b-a3b"
     return settings.SIDECAR_COMPACTION_MODEL
 
+
+
+async def form_candidates_from_observations_with_llm(
+    episode: Dict[str, Any],
+    observations: List[MemoryObservation],
+    *,
+    max_candidates: int,
+) -> Tuple[List[MemoryCandidateLite], Dict[str, Any]]:
+    provider = _resolve_provider()
+    model = _resolve_model(provider)
+    messages = build_candidate_formation_messages(
+        episode,
+        [observation.to_dict() for observation in observations],
+        max_candidates=max_candidates,
+    )
+    try:
+        raw_text = await _run_completion(provider=provider, model=model, messages=messages)
+        payload = parse_observation_json(raw_text)
+        candidates, quality_report = parse_candidate_payload_from_observations(
+            payload,
+            max_candidates=max_candidates,
+        )
+        return candidates, {
+            "provider": provider,
+            "model": model,
+            "candidate_count": len(candidates),
+            "candidate_quality": quality_report.to_dict(),
+            "raw_preview": raw_text[:1200],
+            "mode": "llm_observation_candidate_formation",
+        }
+    except Exception as exc:
+        return [], {"provider": provider, "model": model, "error": str(exc), "mode": "llm_observation_candidate_formation"}
+
+
+def parse_candidate_payload_from_observations(
+    payload: Any,
+    *,
+    max_candidates: int,
+) -> tuple[List[MemoryCandidateLite], CandidateQualityReport]:
+    if isinstance(payload, dict):
+        raw_items = payload.get("candidates", [])
+    elif isinstance(payload, list):
+        raw_items = payload
+    else:
+        raw_items = []
+    candidates: List[MemoryCandidateLite] = []
+    for raw in raw_items:
+        if isinstance(raw, dict):
+            candidates.append(normalize_candidate(raw, fallback_id=f"cand_{uuid.uuid4().hex}"))
+    return postprocess_candidates(candidates, max_candidates=max_candidates)
 
 OBSERVATION_TO_CANDIDATE = {
     "user_preference_signal": {

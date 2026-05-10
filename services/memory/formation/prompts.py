@@ -89,6 +89,63 @@ def build_observation_messages(episode: Dict[str, Any], *, max_observations: int
     return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
 
+
+def build_candidate_formation_messages(
+    episode: Dict[str, Any],
+    observations: List[Dict[str, Any]],
+    *,
+    max_candidates: int,
+) -> List[Dict[str, str]]:
+    system_prompt = (
+        "You are the memory formation layer for Memoflow. "
+        "You receive structured observations from one completed episode and propose memory candidates for later integration. "
+        "You do not write database rows, create final IDs, mutate existing memory, build graph edges, or decide final retrieval behavior. "
+        "You may include a brief natural-language note, but your response must contain exactly one JSON object or JSON array fragment that the caller can parse. "
+        "Prefer an empty candidates list when the observations do not justify durable memory."
+    )
+    schema = {
+        "candidates": [
+            {
+                "text": "concise memory candidate grounded in observations",
+                "source_observation_ids": ["observation id"],
+                "type": "preference|profile_fact|project_rule|procedure|decision|task_state|entity_relation|episodic_event|embedding_hint|non_memory",
+                "scope": "session|user|project|workspace",
+                "action": "ADD|UPDATE|DELETE|NOOP",
+                "importance": "number from 0.0 to 1.0",
+                "reason": "one short sentence explaining future utility",
+                "stability": "temporary|evolving|stable|unknown",
+                "memory_layer": "raw|event|state|semantic|insight|relation|file|non_memory",
+                "storage_intent": "episode_log|state_kv|semantic_kv|vector_projection|relation_graph|dag|file_memory|review_queue|none",
+                "evidence_policy": "required|multi_evidence_preferred|review_required|none",
+                "lifecycle_hint": "normal|volatile|reinforce|supersedes|archive_after_task|review_before_apply",
+                "risk": "low|medium|high",
+            }
+        ]
+    }
+    user_prompt = "\n\n".join(
+        [
+            f"Emit at most {max_candidates} candidates.",
+            "Required JSON fragment shape. It may be surrounded by a short note, but the JSON fragment itself must be valid:",
+            json.dumps(schema, ensure_ascii=False),
+            "Formation rules:",
+            "- Form candidates from observations, not from unsupported inference.",
+            "- Do not preserve raw chatter unless it has future task value.",
+            "- Temporary one-off style instructions should usually be omitted or NOOP.",
+            "- Use task_state/state_kv for active project state and open loops.",
+            "- Use decision/event/episode_log for project decisions and roadmap turns.",
+            "- Use semantic/semantic_kv for durable user preferences and stable facts.",
+            "- Use file/file_memory for project rules or procedures that should become human-readable guidance.",
+            "- Use relation/relation_graph only for explicit predicates such as depends_on, blocks, supersedes, contradicts, caused_by, derived_from, or part_of.",
+            "- Use review_queue or risk=high when valuable but ambiguous, conflicting, or potentially sensitive.",
+            "Episode evidence:",
+            _render_episode(episode),
+            "Structured observations:",
+            json.dumps({"observations": observations}, ensure_ascii=False, indent=2),
+        ]
+    )
+    return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+
+
 def _render_episode(episode: Dict[str, Any]) -> str:
     lines = [
         f"episode_id: {episode.get('episode_id', '')}",

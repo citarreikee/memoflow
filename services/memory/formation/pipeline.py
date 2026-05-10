@@ -13,6 +13,7 @@ from services.memory.formation.observations import (
     extract_observations_rule_based,
     extract_observations_with_llm,
     form_candidates_from_observations,
+    form_candidates_from_observations_with_llm,
 )
 from services.memory.formation.mutation_planner import build_write_plans
 from services.memory.formation.schemas import MemoryCandidateLite, MemoryObservation, MemoryWritePlan
@@ -95,6 +96,23 @@ async def _form_candidates(
     observations: List[MemoryObservation],
 ) -> tuple[List[MemoryCandidateLite], Dict[str, Any]]:
     if observations:
+        if settings.MEMORY_FORMATION_EXTRACTOR == "llm":
+            candidates, debug = await form_candidates_from_observations_with_llm(
+                episode,
+                observations,
+                max_candidates=settings.MEMORY_FORMATION_MAX_CANDIDATES,
+            )
+            if candidates or not debug.get("error"):
+                return candidates, debug
+            fallback, fallback_debug = form_candidates_from_observations(
+                observations,
+                max_candidates=settings.MEMORY_FORMATION_MAX_CANDIDATES,
+            )
+            fallback_debug["mode"] = "llm_observation_candidate_with_mapping_fallback"
+            fallback_debug["llm_error"] = debug.get("error")
+            fallback_debug["llm_provider"] = debug.get("provider")
+            fallback_debug["llm_model"] = debug.get("model")
+            return fallback, fallback_debug
         return form_candidates_from_observations(
             observations,
             max_candidates=settings.MEMORY_FORMATION_MAX_CANDIDATES,

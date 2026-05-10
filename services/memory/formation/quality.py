@@ -106,6 +106,8 @@ def _clean_candidate(candidate: MemoryCandidateLite, stats: _MutableQualityStats
         reason=reason,
         stability=candidate.stability,
         candidate_id=candidate.candidate_id,
+        source_observation_ids=list(candidate.source_observation_ids),
+        risk=candidate.risk,
         memory_layer=candidate.memory_layer,
         storage_intent=candidate.storage_intent,
         evidence_policy=candidate.evidence_policy,

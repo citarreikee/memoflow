@@ -49,6 +49,46 @@ def build_extraction_messages(episode: Dict[str, Any], *, max_candidates: int) -
     return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
 
+
+def build_observation_messages(episode: Dict[str, Any], *, max_observations: int) -> List[Dict[str, str]]:
+    system_prompt = (
+        "You are the observation layer for Memoflow. "
+        "Your job is not to write long-term memory. Your job is to notice what happened in one completed episode, "
+        "using compact structured observations that downstream memory formation can inspect. "
+        "You may include a brief natural-language note, but your response must contain exactly one JSON object or JSON array fragment that the caller can parse. "
+        "Prefer non_memory_signal or an empty observations list for greetings, acknowledgements, or unsupported inference."
+    )
+    schema = {
+        "observations": [
+            {
+                "text": "specific thing noticed in the episode",
+                "type": "user_preference_signal|project_rule_signal|decision_signal|task_state_signal|open_loop_signal|relation_signal|artifact_signal|procedure_signal|insight_signal|non_memory_signal",
+                "scope_hint": "session|user|project|workspace",
+                "evidence_message_refs": ["message index or role label"],
+                "confidence": "number from 0.0 to 1.0",
+                "reason": "one short sentence",
+                "negative": "boolean; true only when this should suppress memory formation",
+            }
+        ]
+    }
+    user_prompt = "\n\n".join(
+        [
+            f"Emit at most {max_observations} observations.",
+            "Required JSON fragment shape. It may be surrounded by a short note, but the JSON fragment itself must be valid:",
+            json.dumps(schema, ensure_ascii=False),
+            "Observation rules:",
+            "- Observations describe what the memory system should notice, not what should be written to storage.",
+            "- Do not create memory IDs, graph edges, write plans, storage rows, or retrieval plans.",
+            "- Preserve evidence: each observation must be grounded in this episode.",
+            "- Use relation_signal only for explicit dependency, conflict, supersession, cause, derivation, block, or part-of statements.",
+            "- Use non_memory_signal/negative=true for one-off style instructions, greetings, acknowledgements, vague chatter, or unsafe inferences.",
+            "Episode evidence:",
+            _render_episode(episode),
+        ]
+    )
+    return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+
+
 def _render_episode(episode: Dict[str, Any]) -> str:
     lines = [
         f"episode_id: {episode.get('episode_id', '')}",

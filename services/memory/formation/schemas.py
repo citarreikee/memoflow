@@ -20,6 +20,19 @@ MEMORY_TYPES = {
 MEMORY_ACTIONS = {"ADD", "UPDATE", "DELETE", "NOOP"}
 MEMORY_SCOPES = {"session", "user", "project", "workspace"}
 MEMORY_STABILITY = {"temporary", "evolving", "stable", "unknown"}
+OBSERVATION_TYPES = {
+    "user_preference_signal",
+    "project_rule_signal",
+    "decision_signal",
+    "task_state_signal",
+    "open_loop_signal",
+    "relation_signal",
+    "artifact_signal",
+    "procedure_signal",
+    "insight_signal",
+    "non_memory_signal",
+}
+MEMORY_RISKS = {"low", "medium", "high"}
 
 # Memory layer describes what kind of thing the candidate is before any concrete
 # storage backend is chosen. It is the bridge between "what deserves memory" and
@@ -97,6 +110,22 @@ TYPE_DEFAULT_STORAGE_INTENTS = {
 
 
 @dataclass
+class MemoryObservation:
+    observation_id: str
+    episode_id: str
+    type: str
+    text: str
+    scope_hint: str
+    evidence_message_refs: List[str]
+    confidence: float
+    reason: str
+    negative: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class MemoryCandidateLite:
     text: str
     type: str
@@ -106,6 +135,8 @@ class MemoryCandidateLite:
     reason: str
     stability: str = "unknown"
     candidate_id: Optional[str] = None
+    source_observation_ids: List[str] = field(default_factory=list)
+    risk: str = "medium"
     memory_layer: str = "semantic"
     storage_intent: str = "auto"
     evidence_policy: str = "required"
@@ -156,6 +187,10 @@ def normalize_candidate(raw: Dict[str, Any], *, fallback_id: str) -> MemoryCandi
     if stability not in MEMORY_STABILITY:
         stability = "unknown"
     candidate_id = str(raw.get("candidate_id") or fallback_id).strip() or fallback_id
+    source_observation_ids = _normalize_string_list(raw.get("source_observation_ids"))
+    risk = str(raw.get("risk") or "medium").strip()
+    if risk not in MEMORY_RISKS:
+        risk = "medium"
 
     default_layer = default_memory_layer(memory_type)
     memory_layer = str(raw.get("memory_layer") or default_layer).strip()
@@ -186,6 +221,8 @@ def normalize_candidate(raw: Dict[str, Any], *, fallback_id: str) -> MemoryCandi
         reason=reason,
         stability=stability,
         candidate_id=candidate_id,
+        source_observation_ids=source_observation_ids,
+        risk=risk,
         memory_layer=memory_layer,
         storage_intent=storage_intent,
         evidence_policy=evidence_policy,
@@ -203,3 +240,37 @@ def default_storage_intent(memory_type: str, *, scope: str) -> str:
     if memory_type == "procedure" and scope in {"session", "user"}:
         return "semantic_kv"
     return TYPE_DEFAULT_STORAGE_INTENTS.get(memory_type, "none")
+
+
+def normalize_observation(raw: Dict[str, Any], *, fallback_id: str, episode_id: str) -> MemoryObservation:
+    observation_type = str(raw.get("type") or "non_memory_signal").strip()
+    if observation_type not in OBSERVATION_TYPES:
+        observation_type = "non_memory_signal"
+    text = str(raw.get("text") or "").strip()
+    scope_hint = str(raw.get("scope_hint") or "session").strip()
+    if scope_hint not in MEMORY_SCOPES:
+        scope_hint = "session"
+    try:
+        confidence = float(raw.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = min(1.0, max(0.0, confidence))
+    return MemoryObservation(
+        observation_id=str(raw.get("observation_id") or fallback_id).strip() or fallback_id,
+        episode_id=str(raw.get("episode_id") or episode_id).strip() or episode_id,
+        type=observation_type,
+        text=text,
+        scope_hint=scope_hint,
+        evidence_message_refs=_normalize_string_list(raw.get("evidence_message_refs")),
+        confidence=confidence,
+        reason=str(raw.get("reason") or "").strip(),
+        negative=bool(raw.get("negative", False)),
+    )
+
+
+def _normalize_string_list(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []

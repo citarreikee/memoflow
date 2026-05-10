@@ -6,27 +6,20 @@ from typing import Any, Dict, List
 
 def build_extraction_messages(episode: Dict[str, Any], *, max_candidates: int) -> List[Dict[str, str]]:
     system_prompt = (
-        "You are a memory formation sidecar for Memoflow. "
-        "Your job is to extract lightweight memory candidates from one completed episode. "
+        "You are a legacy memory candidate fallback for Memoflow. "
+        "Your job is only to propose semantic memory candidates from one completed episode when the observation pipeline is unavailable. "
+        "Do not output IDs, confidence scores, importance scores, storage backends, database fields, evidence IDs, or lifecycle hints. "
         "You may include a brief natural-language note, but your response must contain exactly one JSON object or JSON array fragment that the caller can parse. "
-        "Classify the memory layer and storage intent, but do not write storage, generate IDs, create graph edges, TTLs, database rows, retrieval plans, or prompt injection. "
-        "Prefer NOOP or an empty candidates list when unsure. Do not infer hidden preferences from one ambiguous turn. "
-        "Avoid sensitive personal data unless explicitly necessary for task continuity."
+        "Prefer an empty candidates list when unsure. Do not infer hidden preferences from one ambiguous turn."
     )
     schema = {
         "candidates": [
             {
-                "text": "concise memory statement",
-                "type": "preference|profile_fact|project_rule|procedure|decision|task_state|entity_relation|episodic_event|embedding_hint|non_memory",
-                "scope": "session|user|project|workspace",
-                "action": "ADD|UPDATE|DELETE|NOOP",
-                "importance": "number from 0.0 to 1.0",
+                "memory_content": "concise memory candidate",
+                "memory_type": "preference|profile_fact|project_rule|procedure|decision|task_state|entity_relation|episodic_event|embedding_hint|non_memory",
+                "memory_layers": ["raw|event|state|semantic|insight|relation|file"],
+                "write_tendency": "write|review|do_not_write",
                 "reason": "one short sentence",
-                "stability": "temporary|evolving|stable|unknown",
-                "memory_layer": "raw|event|state|semantic|insight|relation|file|non_memory",
-                "storage_intent": "episode_log|state_kv|semantic_kv|vector_projection|relation_graph|dag|file_memory|review_queue|none",
-                "evidence_policy": "required|multi_evidence_preferred|review_required|none",
-                "lifecycle_hint": "normal|volatile|reinforce|supersedes|archive_after_task|review_before_apply",
             }
         ]
     }
@@ -37,11 +30,11 @@ def build_extraction_messages(episode: Dict[str, Any], *, max_candidates: int) -
             json.dumps(schema, ensure_ascii=False),
             "Quality rules:",
             "- Emit at most one candidate for the same durable fact.",
-            "- Candidate text must be specific, short, and evidence-backed by this episode.",
-            "- Use non_memory/NOOP or [] for greetings, vague chatter, or unsupported inferences.",
+            "- Candidate content must be specific, short, and grounded in this episode.",
+            "- Do not output IDs, confidence scores, importance scores, storage backends, database fields, evidence IDs, or lifecycle hints.",
+            "- Code will derive scope, action, stability, importance, storage intent, evidence policy, and lifecycle from your semantic fields.",
+            "- Use write_tendency=do_not_write or [] for greetings, vague chatter, one-off instructions, or unsupported inferences.",
             "- Use entity_relation only for explicit predicates such as depends_on, blocks, supersedes, contradicts, or derived_from.",
-            "- memory_layer means what kind of memory this is; storage_intent is only a routing hint for later deterministic planners.",
-            "- Prefer state/state_kv for active task status, event/episode_log for decisions, semantic/semantic_kv for durable facts or preferences, relation/relation_graph for explicit predicates, and file/file_memory for project rules/procedures that should become file-backed guidance.",
             "Episode evidence:",
             _render_episode(episode),
         ]
@@ -61,13 +54,10 @@ def build_observation_messages(episode: Dict[str, Any], *, max_observations: int
     schema = {
         "observations": [
             {
-                "text": "specific thing noticed in the episode",
-                "type": "user_preference_signal|project_rule_signal|decision_signal|task_state_signal|open_loop_signal|relation_signal|artifact_signal|procedure_signal|insight_signal|non_memory_signal",
-                "scope_hint": "session|user|project|workspace",
-                "evidence_message_refs": ["message index or role label"],
-                "confidence": "number from 0.0 to 1.0",
+                "content": "specific thing noticed in the episode",
+                "observation_type": "user_preference_signal|project_rule_signal|decision_signal|task_state_signal|open_loop_signal|relation_signal|artifact_signal|procedure_signal|insight_signal|non_memory_signal",
+                "disposition": "notice|suppress",
                 "reason": "one short sentence",
-                "negative": "boolean; true only when this should suppress memory formation",
             }
         ]
     }
@@ -78,8 +68,8 @@ def build_observation_messages(episode: Dict[str, Any], *, max_observations: int
             json.dumps(schema, ensure_ascii=False),
             "Observation rules:",
             "- Observations describe what the memory system should notice, not what should be written to storage.",
-            "- Do not create memory IDs, graph edges, write plans, storage rows, or retrieval plans.",
-            "- Preserve evidence: each observation must be grounded in this episode.",
+            "- Do not create memory IDs, confidence scores, evidence IDs, graph edges, write plans, storage rows, or retrieval plans.",
+            "- Evidence references are handled by code; just make each observation grounded in this episode.",
             "- Use relation_signal only for explicit dependency, conflict, supersession, cause, derivation, block, or part-of statements.",
             "- Use non_memory_signal/negative=true for one-off style instructions, greetings, acknowledgements, vague chatter, or unsafe inferences.",
             "Episode evidence:",
@@ -106,19 +96,12 @@ def build_candidate_formation_messages(
     schema = {
         "candidates": [
             {
-                "text": "concise memory candidate grounded in observations",
-                "source_observation_ids": ["observation id"],
-                "type": "preference|profile_fact|project_rule|procedure|decision|task_state|entity_relation|episodic_event|embedding_hint|non_memory",
-                "scope": "session|user|project|workspace",
-                "action": "ADD|UPDATE|DELETE|NOOP",
-                "importance": "number from 0.0 to 1.0",
+                "memory_content": "concise memory candidate grounded in observations",
+                "source_observation_indices": [0],
+                "memory_type": "preference|profile_fact|project_rule|procedure|decision|task_state|entity_relation|episodic_event|embedding_hint|non_memory",
+                "memory_layers": ["raw|event|state|semantic|insight|relation|file"],
+                "write_tendency": "write|review|do_not_write",
                 "reason": "one short sentence explaining future utility",
-                "stability": "temporary|evolving|stable|unknown",
-                "memory_layer": "raw|event|state|semantic|insight|relation|file|non_memory",
-                "storage_intent": "episode_log|state_kv|semantic_kv|vector_projection|relation_graph|dag|file_memory|review_queue|none",
-                "evidence_policy": "required|multi_evidence_preferred|review_required|none",
-                "lifecycle_hint": "normal|volatile|reinforce|supersedes|archive_after_task|review_before_apply",
-                "risk": "low|medium|high",
             }
         ]
     }
@@ -129,14 +112,16 @@ def build_candidate_formation_messages(
             json.dumps(schema, ensure_ascii=False),
             "Formation rules:",
             "- Form candidates from observations, not from unsupported inference.",
+            "- Do not output IDs, confidence scores, importance scores, storage backends, database fields, evidence IDs, or lifecycle hints.",
+            "- Code will derive scope, stability, storage intent, action, importance, evidence policy, and lifecycle from your semantic fields.",
             "- Do not preserve raw chatter unless it has future task value.",
-            "- Temporary one-off style instructions should usually be omitted or NOOP.",
-            "- Use task_state/state_kv for active project state and open loops.",
-            "- Use decision/event/episode_log for project decisions and roadmap turns.",
-            "- Use semantic/semantic_kv for durable user preferences and stable facts.",
-            "- Use file/file_memory for project rules or procedures that should become human-readable guidance.",
-            "- Use relation/relation_graph only for explicit predicates such as depends_on, blocks, supersedes, contradicts, caused_by, derived_from, or part_of.",
-            "- Use review_queue or risk=high when valuable but ambiguous, conflicting, or potentially sensitive.",
+            "- Temporary one-off style instructions should usually use write_tendency=do_not_write.",
+            "- Use task_state/state for active project state and open loops.",
+            "- Use decision/event for project decisions and roadmap turns.",
+            "- Use semantic for durable user preferences and stable facts.",
+            "- Use file for project rules or procedures that should become human-readable guidance.",
+            "- Use relation only for explicit predicates such as depends_on, blocks, supersedes, contradicts, caused_by, derived_from, or part_of.",
+            "- Use write_tendency=review when valuable but ambiguous, conflicting, or potentially sensitive.",
             "Episode evidence:",
             _render_episode(episode),
             "Structured observations:",
@@ -192,11 +177,7 @@ def build_integration_messages(
 
 
 def _render_episode(episode: Dict[str, Any]) -> str:
-    lines = [
-        f"episode_id: {episode.get('episode_id', '')}",
-        f"turn_index: {episode.get('turn_index', '')}",
-        f"source: {episode.get('source', '')}",
-    ]
+    lines: List[str] = []
     for message in episode.get("messages") or []:
         if not isinstance(message, dict):
             continue

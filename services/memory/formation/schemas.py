@@ -167,25 +167,25 @@ class MemoryWritePlan:
 
 
 def normalize_candidate(raw: Dict[str, Any], *, fallback_id: str) -> MemoryCandidateLite:
-    text = str(raw.get("text") or "").strip()
-    memory_type = str(raw.get("type") or "non_memory").strip()
+    text = str(raw.get("text") or raw.get("memory_content") or "").strip()
+    memory_type = str(raw.get("type") or raw.get("memory_type") or "non_memory").strip()
     if memory_type not in MEMORY_TYPES:
         memory_type = "non_memory"
-    scope = str(raw.get("scope") or "session").strip()
+    scope = str(raw.get("scope") or default_memory_scope(memory_type)).strip()
     if scope not in MEMORY_SCOPES:
-        scope = "session"
-    action = str(raw.get("action") or "NOOP").strip().upper()
+        scope = default_memory_scope(memory_type)
+    action = str(raw.get("action") or _action_from_tendency(raw.get("write_tendency")) or "NOOP").strip().upper()
     if action not in MEMORY_ACTIONS:
         action = "NOOP"
     try:
-        importance = float(raw.get("importance", 0.0))
+        importance = float(raw.get("importance", default_importance(memory_type, action=action)))
     except (TypeError, ValueError):
         importance = 0.0
     importance = min(1.0, max(0.0, importance))
     reason = str(raw.get("reason") or "").strip()
-    stability = str(raw.get("stability") or "unknown").strip()
+    stability = str(raw.get("stability") or default_stability(memory_type)).strip()
     if stability not in MEMORY_STABILITY:
-        stability = "unknown"
+        stability = default_stability(memory_type)
     candidate_id = str(raw.get("candidate_id") or fallback_id).strip() or fallback_id
     source_observation_ids = _normalize_string_list(raw.get("source_observation_ids"))
     risk = str(raw.get("risk") or "medium").strip()
@@ -193,7 +193,8 @@ def normalize_candidate(raw: Dict[str, Any], *, fallback_id: str) -> MemoryCandi
         risk = "medium"
 
     default_layer = default_memory_layer(memory_type)
-    memory_layer = str(raw.get("memory_layer") or default_layer).strip()
+    memory_layers = _normalize_string_list(raw.get("memory_layers"))
+    memory_layer = str(raw.get("memory_layer") or (memory_layers[0] if memory_layers else "") or default_layer).strip()
     if memory_layer not in MEMORY_LAYERS:
         memory_layer = default_layer
 
@@ -234,6 +235,49 @@ def default_memory_layer(memory_type: str) -> str:
     return TYPE_DEFAULT_LAYERS.get(memory_type, "non_memory")
 
 
+def default_memory_scope(memory_type: str) -> str:
+    if memory_type in {"preference", "profile_fact"}:
+        return "user"
+    if memory_type == "non_memory":
+        return "session"
+    return "project"
+
+
+def default_importance(memory_type: str, *, action: str) -> float:
+    if action == "NOOP" or memory_type == "non_memory":
+        return 0.0
+    return {
+        "preference": 0.72,
+        "profile_fact": 0.68,
+        "project_rule": 0.78,
+        "procedure": 0.74,
+        "decision": 0.74,
+        "task_state": 0.66,
+        "entity_relation": 0.70,
+        "episodic_event": 0.58,
+        "embedding_hint": 0.56,
+    }.get(memory_type, 0.5)
+
+
+def default_stability(memory_type: str) -> str:
+    if memory_type in {"task_state", "episodic_event"}:
+        return "temporary"
+    if memory_type in {"preference", "profile_fact", "project_rule", "procedure"}:
+        return "stable"
+    if memory_type in {"decision", "entity_relation", "embedding_hint"}:
+        return "evolving"
+    return "unknown"
+
+
+def _action_from_tendency(value: Any) -> str:
+    tendency = str(value or "").strip()
+    if tendency in {"do_not_write", "noop", "ignore"}:
+        return "NOOP"
+    if tendency in {"write", "propose", "review", "needs_review"}:
+        return "ADD"
+    return ""
+
+
 def default_storage_intent(memory_type: str, *, scope: str) -> str:
     if memory_type == "project_rule" and scope in {"session", "user"}:
         return "semantic_kv"
@@ -243,13 +287,13 @@ def default_storage_intent(memory_type: str, *, scope: str) -> str:
 
 
 def normalize_observation(raw: Dict[str, Any], *, fallback_id: str, episode_id: str) -> MemoryObservation:
-    observation_type = str(raw.get("type") or "non_memory_signal").strip()
+    observation_type = str(raw.get("type") or raw.get("observation_type") or "non_memory_signal").strip()
     if observation_type not in OBSERVATION_TYPES:
         observation_type = "non_memory_signal"
-    text = str(raw.get("text") or "").strip()
-    scope_hint = str(raw.get("scope_hint") or "session").strip()
+    text = str(raw.get("text") or raw.get("content") or "").strip()
+    scope_hint = str(raw.get("scope_hint") or default_observation_scope(observation_type)).strip()
     if scope_hint not in MEMORY_SCOPES:
-        scope_hint = "session"
+        scope_hint = default_observation_scope(observation_type)
     try:
         confidence = float(raw.get("confidence", 0.0))
     except (TypeError, ValueError):
@@ -262,10 +306,31 @@ def normalize_observation(raw: Dict[str, Any], *, fallback_id: str, episode_id: 
         text=text,
         scope_hint=scope_hint,
         evidence_message_refs=_normalize_string_list(raw.get("evidence_message_refs")),
-        confidence=confidence,
+        confidence=confidence if raw.get("confidence") is not None else default_observation_confidence(observation_type),
         reason=str(raw.get("reason") or "").strip(),
-        negative=bool(raw.get("negative", False)),
+        negative=_observation_negative(raw),
     )
+
+
+def default_observation_scope(observation_type: str) -> str:
+    if observation_type == "user_preference_signal":
+        return "user"
+    if observation_type == "non_memory_signal":
+        return "session"
+    return "project"
+
+
+def default_observation_confidence(observation_type: str) -> float:
+    if observation_type == "non_memory_signal":
+        return 0.0
+    return 0.7
+
+
+def _observation_negative(raw: Dict[str, Any]) -> bool:
+    disposition = str(raw.get("disposition") or "").strip()
+    if disposition in {"suppress", "ignore", "non_memory"}:
+        return True
+    return bool(raw.get("negative", False))
 
 
 def _normalize_string_list(value: Any) -> List[str]:

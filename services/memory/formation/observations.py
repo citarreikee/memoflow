@@ -217,6 +217,7 @@ async def form_candidates_from_observations_with_llm(
         payload = parse_observation_json(raw_text)
         candidates, quality_report = parse_candidate_payload_from_observations(
             payload,
+            observations=observations,
             max_candidates=max_candidates,
         )
         return candidates, {
@@ -234,6 +235,7 @@ async def form_candidates_from_observations_with_llm(
 def parse_candidate_payload_from_observations(
     payload: Any,
     *,
+    observations: List[MemoryObservation] | None = None,
     max_candidates: int,
 ) -> tuple[List[MemoryCandidateLite], CandidateQualityReport]:
     if isinstance(payload, dict):
@@ -243,10 +245,44 @@ def parse_candidate_payload_from_observations(
     else:
         raw_items = []
     candidates: List[MemoryCandidateLite] = []
+    observations = observations or []
     for raw in raw_items:
         if isinstance(raw, dict):
-            candidates.append(normalize_candidate(raw, fallback_id=f"cand_{uuid.uuid4().hex}"))
+            normalized_raw = _candidate_raw_from_minimal_llm(raw, observations=observations)
+            candidates.append(normalize_candidate(normalized_raw, fallback_id=f"cand_{uuid.uuid4().hex}"))
     return postprocess_candidates(candidates, max_candidates=max_candidates)
+
+
+def _candidate_raw_from_minimal_llm(raw: Dict[str, Any], *, observations: List[MemoryObservation]) -> Dict[str, Any]:
+    if "memory_content" not in raw and "memory_type" not in raw:
+        return raw
+    observation_indices = _normalize_indices(raw.get("source_observation_indices"))
+    source_observation_ids = [
+        observations[index].observation_id for index in observation_indices if 0 <= index < len(observations)
+    ]
+    memory_type = str(raw.get("memory_type") or raw.get("type") or "non_memory").strip()
+    write_tendency = str(raw.get("write_tendency") or "write").strip()
+    return {
+        "text": raw.get("memory_content") or raw.get("text") or "",
+        "type": memory_type,
+        "reason": raw.get("reason") or "Derived from structured observations.",
+        "write_tendency": write_tendency,
+        "memory_layers": raw.get("memory_layers") or [],
+        "source_observation_ids": source_observation_ids,
+    }
+
+
+def _normalize_indices(value: Any) -> List[int]:
+    raw_values = value if isinstance(value, list) else [value]
+    indices: List[int] = []
+    for item in raw_values:
+        try:
+            index = int(item)
+        except (TypeError, ValueError):
+            continue
+        if index not in indices:
+            indices.append(index)
+    return indices
 
 OBSERVATION_TO_CANDIDATE = {
     "user_preference_signal": {

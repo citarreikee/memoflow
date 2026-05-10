@@ -146,6 +146,51 @@ def build_candidate_formation_messages(
     return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
 
+
+def build_integration_messages(
+    candidate: Dict[str, Any],
+    related_existing_memories: List[Dict[str, Any]],
+) -> List[Dict[str, str]]:
+    system_prompt = (
+        "You are the semantic memory integration judge for Memoflow. "
+        "You decide how one candidate memory should enter long-term memory compared with already related memories. "
+        "Do not write databases, create IDs, reference hidden identifiers, assign confidence scores, or design storage tables. "
+        "Only choose a memory layer set, a write strategy, related existing memory indices, and a short reason. "
+        "Your response may include a brief note, but it must contain exactly one JSON object fragment that the caller can parse."
+    )
+    schema = {
+        "memory_content": "final concise memory content, or empty string for do_not_write",
+        "memory_layers": ["raw|event|state|semantic|insight|relation|file"],
+        "write_strategy": "add_new|do_not_write|merge_with_existing|update_existing|supersede_existing|link_as_relation|mark_conflict|needs_review",
+        "related_existing_indices": [0],
+        "reason": "one short sentence",
+        "relation_type": "depends_on|blocks|supersedes|contradicts|derived_from|part_of|caused_by|null",
+    }
+    user_prompt = "\n\n".join(
+        [
+            "Decide the clean semantic write strategy for this candidate memory.",
+            "Required JSON fragment shape:",
+            json.dumps(schema, ensure_ascii=False),
+            "Rules:",
+            "- Use only array indices from related_existing_memories; never invent database IDs.",
+            "- Do not output confidence scores. Choose the strategy directly.",
+            "- Choose multiple memory_layers only when the memory genuinely spans layers, such as a decision that is both event and semantic guidance.",
+            "- Use merge_with_existing when the candidate and an existing memory express the same durable fact with compatible wording.",
+            "- Use update_existing when the candidate revises a current state or mutable fact without invalidating history.",
+            "- Use supersede_existing when the candidate clearly replaces an older preference, rule, or decision.",
+            "- Use mark_conflict when candidate and existing memory disagree but the winner is not safely clear.",
+            "- Use link_as_relation only for explicit relations such as depends_on, blocks, supersedes, contradicts, derived_from, part_of, or caused_by.",
+            "- Use needs_review for valuable but ambiguous, risky, under-evidenced, or over-broad memory.",
+            "- Use do_not_write when the candidate is chatter, temporary one-off instruction, or already fully covered.",
+            "Candidate memory:",
+            json.dumps(candidate, ensure_ascii=False, indent=2),
+            "Related existing memories:",
+            json.dumps({"related_existing_memories": related_existing_memories}, ensure_ascii=False, indent=2),
+        ]
+    )
+    return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+
+
 def _render_episode(episode: Dict[str, Any]) -> str:
     lines = [
         f"episode_id: {episode.get('episode_id', '')}",

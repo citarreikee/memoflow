@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
@@ -14,6 +14,7 @@ INTEGRATION_ACTIONS = {
     "LINK",
     "NOOP",
     "NEEDS_REVIEW",
+    "CONFLICT",
 }
 
 
@@ -51,6 +52,9 @@ class MemoryIntegrationPlan:
     related_memory_ids: List[str] = field(default_factory=list)
     graph_relations: List[Dict[str, str]] = field(default_factory=list)
     suggested_text: Optional[str] = None
+    memory_layers: List[str] = field(default_factory=list)
+    write_strategy: Optional[str] = None
+    related_existing_indices: List[int] = field(default_factory=list)
     blocked_reasons: List[str] = field(default_factory=list)
     needs_review_reasons: List[str] = field(default_factory=list)
 

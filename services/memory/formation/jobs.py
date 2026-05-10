@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from config import settings
+from services.memory.formation.integration_llm import plan_memory_integration_with_llm
 from services.memory.formation.integration_planner import plan_memory_integration
 from services.memory.formation.neighborhood import MemoryNeighborhoodRepository
 from services.memory.formation.pipeline import MemoryFormationResult, run_memory_formation_dry_run
@@ -59,7 +60,7 @@ class MemoryFormationJobRunner:
         apply_result: Optional[MemoryApplyResult] = None
         integration_debug: Optional[Dict[str, Any]] = None
         if settings.MEMORY_STORAGE_ENABLED:
-            integration_debug = self._plan_integrations(
+            integration_debug = await self._plan_integrations(
                 session_id=session_id,
                 workspace_dir=workspace_dir,
                 formation=formation,
@@ -104,7 +105,7 @@ class MemoryFormationJobRunner:
         return result
 
 
-    def _plan_integrations(
+    async def _plan_integrations(
         self,
         *,
         session_id: str,
@@ -124,19 +125,35 @@ class MemoryFormationJobRunner:
                 session_id=session_id,
                 workspace_dir=workspace_dir,
             )
-            integration = plan_memory_integration(candidate, existing_memories=snapshots)
+            integration_mode = "rule_integration"
+            llm_debug: Optional[Dict[str, Any]] = None
+            if settings.MEMORY_FORMATION_EXTRACTOR == "llm":
+                llm_integration, llm_debug = await plan_memory_integration_with_llm(
+                    candidate,
+                    existing_memories=snapshots,
+                )
+                if llm_debug.get("error"):
+                    integration = plan_memory_integration(candidate, existing_memories=snapshots)
+                    integration_mode = "llm_minimal_with_rule_fallback"
+                else:
+                    integration = llm_integration
+                    integration_mode = "llm_minimal_integration"
+            else:
+                integration = plan_memory_integration(candidate, existing_memories=snapshots)
             action_counts[integration.action] = action_counts.get(integration.action, 0) + 1
             snapshot_count += len(snapshots)
-            plans.append(
-                {
-                    "candidate_id": candidate.candidate_id,
-                    "candidate_type": candidate.type,
-                    "candidate_scope": candidate.scope,
-                    "snapshot_count": len(snapshots),
-                    "snapshots": [snapshot.to_dict() for snapshot in snapshots],
-                    "plan": integration.to_dict(),
-                }
-            )
+            plan_debug = {
+                "candidate_id": candidate.candidate_id,
+                "candidate_type": candidate.type,
+                "candidate_scope": candidate.scope,
+                "integration_mode": integration_mode,
+                "snapshot_count": len(snapshots),
+                "snapshots": [snapshot.to_dict() for snapshot in snapshots],
+                "plan": integration.to_dict(),
+            }
+            if llm_debug:
+                plan_debug["llm"] = llm_debug
+            plans.append(plan_debug)
         return {
             "enabled": True,
             "candidate_count": len(formation.candidates),

@@ -12,6 +12,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from services.memory.formation.mutation_planner import build_write_plan
 from services.memory.formation.schemas import MemoryCandidateLite, normalize_candidate
+from services.memory.formation.shape_planner import plan_storage_shape
 
 
 FIXTURE_PATH = ROOT_DIR / "tests" / "fixtures" / "memory_golden_cases.json"
@@ -75,6 +76,72 @@ def test_normalization_clamps_unsafe_values() -> None:
     assert candidate.lifecycle_hint == "normal"
 
 
+def test_storage_routing_matrix_degrades_unimplemented_intents() -> None:
+    state = MemoryCandidateLite(
+        text="Task state: integration routing preview is being implemented.",
+        type="task_state",
+        scope="project",
+        action="ADD",
+        importance=0.8,
+        reason="Current project state.",
+        storage_intent="state_kv",
+    )
+    state_shape = plan_storage_shape(state)
+    assert state_shape.canonical_store == "semantic_kv"
+    assert "state_kv_downgraded_to_semantic_kv" in state_shape.blocked_reasons
+
+    dag = MemoryCandidateLite(
+        text="Decision A supersedes Decision B.",
+        type="decision",
+        scope="project",
+        action="ADD",
+        importance=0.85,
+        reason="Decision evolution chain.",
+        memory_layer="event",
+        storage_intent="dag",
+    )
+    dag_shape = plan_storage_shape(dag)
+    assert dag_shape.canonical_store == "episode_log"
+    assert "relation_graph" in dag_shape.projections
+    assert "dag_projection_only" in dag_shape.blocked_reasons
+
+    vector = MemoryCandidateLite(
+        text="Search surface hint for runtime compaction.",
+        type="embedding_hint",
+        scope="project",
+        action="ADD",
+        importance=0.7,
+        reason="Useful for fuzzy recall.",
+        storage_intent="vector_projection",
+    )
+    vector_shape = plan_storage_shape(vector)
+    assert vector_shape.canonical_store == "semantic_kv"
+    assert "vector_projection" in vector_shape.projections
+    assert "vector_projection_not_source_of_truth" in vector_shape.blocked_reasons
+
+
+def test_storage_routing_preview_respects_write_strategy_gate() -> None:
+    candidate = MemoryCandidateLite(
+        text="The user prefers concise Chinese replies.",
+        type="preference",
+        scope="user",
+        action="ADD",
+        importance=0.8,
+        reason="Durable style preference.",
+        stability="stable",
+    )
+
+    review_shape = plan_storage_shape(candidate, write_strategy="needs_review", memory_layers=["semantic"])
+    assert review_shape.canonical_store is None
+    assert "episode_log" in review_shape.projections
+    assert "review_queue_not_implemented" in review_shape.blocked_reasons
+
+    conflict_shape = plan_storage_shape(candidate, write_strategy="mark_conflict", memory_layers=["semantic"])
+    assert conflict_shape.canonical_store is None
+    assert "relation_graph" in conflict_shape.projections
+    assert "conflict_requires_review" in conflict_shape.blocked_reasons
+
+
 def _message(case: Dict[str, Any], field: str, expected: Any, actual: Any) -> str:
     return f"{case['id']} expected {field}={expected!r}, got {actual!r}"
 
@@ -85,9 +152,10 @@ def main() -> None:
     for case in cases:
         test_golden_case(case)
     test_normalization_clamps_unsafe_values()
+    test_storage_routing_matrix_degrades_unimplemented_intents()
+    test_storage_routing_preview_respects_write_strategy_gate()
     print(f"memory quality contract ok ({len(cases)} golden cases)")
 
 
 if __name__ == "__main__":
     main()
-

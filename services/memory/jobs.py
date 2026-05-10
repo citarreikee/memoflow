@@ -296,6 +296,21 @@ class MemoryJobQueue:
             ).fetchall()
             return [_row_to_job(row) for row in rows]
 
+    def has_active_job(self, *, session_id: str, job_type: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM memory_jobs
+                WHERE session_id = ?
+                  AND job_type = ?
+                  AND status IN (?, ?)
+                LIMIT 1
+                """,
+                (session_id, job_type, PENDING, RUNNING),
+            ).fetchone()
+            return row is not None
+
 
 def _row_to_job(row: sqlite3.Row) -> MemoryJob:
     return MemoryJob(

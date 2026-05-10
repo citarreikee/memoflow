@@ -6,8 +6,10 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
 from config import settings
+from services.memory.compaction_jobs import COMPACTION_JOB_TYPE, MemoryCompactionJobRunner
 from services.memory.formation.jobs import MemoryFormationJobRunner
 from services.memory.jobs import MemoryJob, MemoryJobQueue
+from services.memory.session_store import SessionStore
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,7 @@ class MemoryWorker:
         *,
         queue: MemoryJobQueue,
         formation_runner: Optional[MemoryFormationJobRunner] = None,
+        compaction_runner: Optional[MemoryCompactionJobRunner] = None,
         worker_id: Optional[str] = None,
         retry_delay_seconds: int = 60,
         stale_after_seconds: Optional[int] = None,
@@ -37,6 +40,10 @@ class MemoryWorker:
         self.queue = queue
         self.worker_id = worker_id or f"memory-worker-{uuid.uuid4().hex[:8]}"
         self.formation_runner = formation_runner or MemoryFormationJobRunner(log_dir=str(queue.base_dir), queue=queue)
+        self.compaction_runner = compaction_runner or MemoryCompactionJobRunner(
+            store=SessionStore(str(queue.base_dir)),
+            queue=queue,
+        )
         self.retry_delay_seconds = retry_delay_seconds
         self.stale_after_seconds = stale_after_seconds if stale_after_seconds is not None else settings.MEMORY_JOB_STALE_AFTER_SECONDS
 
@@ -80,5 +87,8 @@ class MemoryWorker:
     async def _dispatch(self, job: MemoryJob) -> Dict[str, Any]:
         if job.job_type == "memory_formation":
             result = await self.formation_runner.run_queued_job(job)
+            return result.to_debug_dict()
+        if job.job_type == COMPACTION_JOB_TYPE:
+            result = await self.compaction_runner.run_queued_job(job)
             return result.to_debug_dict()
         raise ValueError(f"unsupported_memory_job_type:{job.job_type}")

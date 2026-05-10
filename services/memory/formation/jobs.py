@@ -8,6 +8,7 @@ from services.memory.formation.integration_llm import plan_memory_integration_wi
 from services.memory.formation.integration_planner import plan_memory_integration
 from services.memory.formation.neighborhood import MemoryNeighborhoodRepository
 from services.memory.formation.pipeline import MemoryFormationResult, run_memory_formation_dry_run
+from services.memory.formation.shape_planner import plan_storage_shape
 from services.memory.jobs import MemoryJob, MemoryJobQueue
 from services.memory.storage.applier import MemoryApplyResult, MemoryWriteApplier
 from services.memory.storage.sqlite_store import MemorySQLiteStore
@@ -152,6 +153,11 @@ class MemoryFormationJobRunner:
                 "snapshots": [snapshot.to_dict() for snapshot in snapshots],
                 "rule_plan": rule_integration.to_dict(),
                 "plan": integration.to_dict(),
+                "storage_route_preview": plan_storage_shape(
+                    candidate,
+                    write_strategy=integration.write_strategy,
+                    memory_layers=integration.memory_layers,
+                ).to_dict(),
             }
             if llm_debug:
                 plan_debug["llm"] = llm_debug

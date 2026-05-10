@@ -13,8 +13,10 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from config import settings
+from services.memory.compaction_jobs import MemoryCompactionJobRunner
 from services.memory.formation.jobs import MemoryFormationJobRunner
 from services.memory.jobs import MemoryJobQueue
+from services.memory.session_store import SessionStore
 from services.memory.worker import MemoryWorker
 
 
@@ -22,9 +24,11 @@ async def main_async() -> None:
     args = parse_args()
     queue = MemoryJobQueue(args.data_dir or settings.MEMORY_DATA_DIR)
     formation_runner = MemoryFormationJobRunner(log_dir=args.log_dir or settings.MEMORY_WRITE_PLAN_LOG_DIR, queue=queue)
+    compaction_runner = MemoryCompactionJobRunner(store=SessionStore(args.data_dir or settings.MEMORY_DATA_DIR), queue=queue)
     worker = MemoryWorker(
         queue=queue,
         formation_runner=formation_runner,
+        compaction_runner=compaction_runner,
         worker_id=args.worker_id,
         retry_delay_seconds=args.retry_delay_seconds,
         stale_after_seconds=args.stale_after_seconds,

@@ -404,12 +404,12 @@ Main chat should not synchronously run heavyweight memory work.
 ```text
 finalize_turn
 -> persist episode
+-> enqueue compaction job when post-turn policy says old raw turns should be compressed
 -> enqueue observation job
 -> enqueue candidate formation job
 -> enqueue integration/routing job
 -> enqueue safe apply job
 -> enqueue projection/index jobs
--> maybe enqueue compaction job
 ```
 
 ### Job requirements
@@ -420,6 +420,7 @@ finalize_turn
 - Stale running recovery.
 - Traceable job outputs.
 - Non-blocking chat failure behavior.
+- Post-turn compaction must be queued, not awaited in `finalize_turn`; sidecar compaction can be slow and must not block the next turn's session state.
 
 ### Implementation plan
 

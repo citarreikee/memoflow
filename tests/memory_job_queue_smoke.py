@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from chat_history import SessionManager
 from config import settings
+from services.memory.compaction_jobs import COMPACTION_JOB_TYPE
 from services.memory.formation.jobs import MemoryFormationJobRunner
 from services.memory.jobs import DEAD, PENDING, RUNNING, SUCCEEDED, MemoryJobQueue
 from services.memory.runtime import MemoryRuntime
@@ -172,11 +173,56 @@ async def test_queued_formation_job_can_be_consumed() -> None:
         assert completed.result.get("triggered") is True
 
 
+async def test_runtime_post_turn_compaction_enqueues_without_saving_checkpoint() -> None:
+    with tempfile.TemporaryDirectory() as tmp, SettingsPatch(
+        MEMORY_DATA_DIR=tmp,
+        MEMORY_FORMATION_ENABLED=False,
+        MEMORY_FORMATION_BACKGROUND=True,
+        MEMORY_WRITE_PLAN_LOG_DIR=tmp,
+        CONTEXT_COMPACTION_MIN_USER_TURNS=3,
+        CONTEXT_COMPACTION_KEEP_RECENT_TURNS=1,
+        CONTEXT_COMPACTION_TRIGGER_RATIO=0.01,
+        SIDECAR_COMPACTION_ENABLED=True,
+    ):
+        store = SessionStore(tmp)
+        runtime = MemoryRuntime(store)
+        manager = SessionManager()
+        session = manager.create_session(model="deepseek-v4-pro", metadata={"workspace_dir": tmp})
+        store.upsert_session(session)
+
+        queued_debug = None
+        for index in range(4):
+            user = manager.add_message(session.session_id, "user", f"Decision: compaction queue test turn {index}.")
+            persist_session_message(store, session, user)
+            assistant = manager.add_message(session.session_id, "assistant", "Acknowledged.")
+            persist_session_message(store, session, assistant)
+            debug = await runtime.finalize_turn(
+                manager,
+                session_id=session.session_id,
+                input_source="memory-compaction-queue-smoke",
+                token_budget=1000,
+                memory_debug={},
+            )
+            if "post_turn_compaction_queued" in debug.get("events", []):
+                queued_debug = debug
+
+        jobs = runtime.compaction_jobs.queue.list_jobs(job_type=COMPACTION_JOB_TYPE)
+        latest_checkpoint = store.get_latest_checkpoint(session.session_id)
+
+        assert queued_debug is not None
+        assert queued_debug.get("maintenance", {}).get("compaction", {}).get("job_id")
+        assert len(jobs) == 1
+        assert jobs[0].status == PENDING
+        assert jobs[0].payload["older_turn_count"] >= 1
+        assert latest_checkpoint is None
+
+
 def main() -> None:
     test_job_queue_lifecycle()
     test_stale_running_jobs_are_requeued_or_deaded()
     asyncio.run(test_runtime_background_formation_enqueues_job())
     asyncio.run(test_queued_formation_job_can_be_consumed())
+    asyncio.run(test_runtime_post_turn_compaction_enqueues_without_saving_checkpoint())
     print("memory job queue smoke ok")
 
 

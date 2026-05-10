@@ -13,9 +13,9 @@ from services.context_utils import (
 )
 from services.memory.checkpoint_audit import (
     build_checkpoint_trace,
-    sanitize_checkpoint_summary,
 )
 from services.memory.checkpoints import get_latest_checkpoint, save_checkpoint
+from services.memory.compaction_jobs import MemoryCompactionJobRunner
 from services.memory.compaction import build_checkpoint_summary, estimate_checkpoint_tokens, split_turns_for_compaction
 from services.memory.formation.jobs import MemoryFormationJobRunner
 from services.memory.policy import (
@@ -68,6 +68,7 @@ class MemoryRuntime:
     def __init__(self, store: SessionStore) -> None:
         self.store = store
         self.formation_jobs = MemoryFormationJobRunner(log_dir=settings.MEMORY_WRITE_PLAN_LOG_DIR)
+        self.compaction_jobs = MemoryCompactionJobRunner(store=store)
         self.retrieval = MemoryRetrievalPipeline()
 
     async def prepare_turn(self, runtime_input: RuntimeInput) -> ContextPackage:
@@ -243,43 +244,37 @@ class MemoryRuntime:
             token_budget=token_budget,
             uncovered_user_turn_count=len(uncovered_turns),
             uncovered_old_turn_count=len(older_turns),
+            checkpoint_job_pending=self.compaction_jobs.has_active_job(session_id=session_id),
         )
 
         saved_checkpoint: Optional[Dict[str, Any]] = None
         if post_policy.post_turn_compaction and older_turns:
             events.add("post_turn_compaction_triggered", reasons=post_policy.reason)
             try:
-                summary, compaction_debug = await build_checkpoint_summary(
-                    older_turns,
-                    previous_checkpoint=latest_checkpoint,
-                )
-                if compaction_debug.get("used_sidecar"):
-                    events.add("sidecar_compaction_succeeded", **compaction_debug)
-                elif compaction_debug.get("used_fallback"):
-                    events.add("sidecar_compaction_failed", **compaction_debug)
-                summary, quality_report = sanitize_checkpoint_summary(summary)
-                events.add("checkpoint_quality_evaluated", **quality_report.to_dict())
-                if not quality_report.ok:
-                    events.add("checkpoint_save_skipped", reason="quality_gate_failed", quality=quality_report.to_dict())
-                    return self._merge_finalize_debug(debug, events, post_policy, None, formation_debug=formation_debug)
                 covered_episode_ids = self._covered_episode_ids_for_count(session_id, covered_count + len(older_turns))
                 if covered_episode_ids:
-                    saved_checkpoint = save_checkpoint(
-                        self.store,
+                    job = self.compaction_jobs.schedule(
                         session_id=session_id,
+                        episode_id=episode_payload["episode_id"],
+                        older_turns=older_turns,
                         covered_episode_ids=covered_episode_ids,
-                        summary=summary,
-                        token_estimate=estimate_checkpoint_tokens(summary),
+                        previous_checkpoint=latest_checkpoint,
+                        reasons=post_policy.reason,
+                        token_budget=token_budget,
+                        post_turn_estimated_tokens=post_turn_tokens,
                     )
                     events.add(
-                        "checkpoint_saved",
-                        checkpoint_id=saved_checkpoint["checkpoint_id"],
+                        "post_turn_compaction_queued",
+                        job_id=job.job_id,
+                        job_type=job.job_type,
                         covered_count=len(covered_episode_ids),
-                        trace=build_checkpoint_trace(self.store, session_id=session_id, checkpoint=saved_checkpoint),
-                        quality=quality_report.to_dict(),
+                        older_turn_count=len(older_turns),
+                        background=True,
                     )
+                else:
+                    events.add("post_turn_compaction_skipped", reason="covered_episode_ids_missing")
             except Exception as exc:
-                events.add("sidecar_compaction_failed", error=str(exc))
+                events.add("post_turn_compaction_queue_failed", error=str(exc))
 
         return self._merge_finalize_debug(debug, events, post_policy, saved_checkpoint, formation_debug=formation_debug)
 
@@ -523,6 +518,9 @@ class MemoryRuntime:
                 debug["audit"]["checkpoint_quality"] = data
             if event_type in {"checkpoint_loaded", "checkpoint_saved"} and data.get("trace"):
                 debug["audit"]["checkpoint_trace"] = data["trace"]
+            if event_type == "post_turn_compaction_queued":
+                debug.setdefault("maintenance", {})
+                debug["maintenance"]["compaction"] = data
         return debug
 
     async def _run_memory_formation(

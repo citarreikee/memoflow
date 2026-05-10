@@ -13,8 +13,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from config import settings
+from services.memory.compaction_jobs import COMPACTION_JOB_TYPE, MemoryCompactionJobRunner
 from services.memory.formation.jobs import MemoryFormationJobRunner
 from services.memory.jobs import DEAD, PENDING, SUCCEEDED, MemoryJobQueue
+from services.memory.session_store import SessionStore
+from services.memory.transcript_store import persist_episode
 from services.memory.worker import MemoryWorker
 
 
@@ -165,11 +168,75 @@ async def test_worker_requeues_stale_running_job_before_claim() -> None:
         assert completed.attempt_count == 2
 
 
+async def test_worker_consumes_compaction_job_and_saves_checkpoint() -> None:
+    with tempfile.TemporaryDirectory() as tmp, SettingsPatch(
+        MEMORY_DATA_DIR=tmp,
+        SIDECAR_COMPACTION_ENABLED=False,
+        CONTEXT_COMPACTION_KEEP_RECENT_TURNS=1,
+    ):
+        queue = MemoryJobQueue(tmp)
+        store = SessionStore(tmp)
+        session_id = "session-compaction-worker"
+        for index in range(3):
+            episode = {
+                "episode_id": f"ep_compact_{index}",
+                "session_id": session_id,
+                "turn_index": index + 1,
+                "source": "worker-compaction-smoke",
+                "message_ids": [f"msg_u_{index}", f"msg_a_{index}"],
+                "messages": [
+                    {"role": "user", "content": f"Decision: worker compaction preserves turn {index}."},
+                    {"role": "assistant", "content": "Acknowledged."},
+                ],
+                "token_estimate": 20,
+                "created_at": "2026-05-11T00:00:00",
+            }
+            persist_episode(store, episode)
+        runner = MemoryCompactionJobRunner(store=store, queue=queue)
+        job = runner.schedule(
+            session_id=session_id,
+            episode_id="ep_compact_2",
+            older_turns=[
+                [
+                    {"role": "user", "content": "Decision: worker compaction preserves turn zero."},
+                    {"role": "assistant", "content": "Acknowledged."},
+                ],
+                [
+                    {"role": "user", "content": "Decision: worker compaction preserves turn one."},
+                    {"role": "assistant", "content": "Acknowledged."},
+                ],
+            ],
+            covered_episode_ids=["ep_compact_0", "ep_compact_1"],
+            previous_checkpoint=None,
+            reasons=["worker_compaction_smoke"],
+            token_budget=1000,
+            post_turn_estimated_tokens=500,
+        )
+        worker = MemoryWorker(
+            queue=queue,
+            compaction_runner=runner,
+            worker_id="compaction-worker",
+            retry_delay_seconds=0,
+        )
+
+        result = await worker.run_once(job_types=[COMPACTION_JOB_TYPE])
+        completed = queue.get(job.job_id)
+        checkpoint = store.get_latest_checkpoint(session_id)
+
+        assert result.status == "succeeded"
+        assert completed is not None
+        assert completed.status == SUCCEEDED
+        assert completed.result.get("saved") is True
+        assert checkpoint is not None
+        assert checkpoint["covered_episode_ids"] == ["ep_compact_0", "ep_compact_1"]
+
+
 def main() -> None:
     asyncio.run(test_worker_consumes_formation_job())
     asyncio.run(test_worker_retries_then_deads_unknown_job())
     asyncio.run(test_worker_run_until_idle_processes_multiple_jobs())
     asyncio.run(test_worker_requeues_stale_running_job_before_claim())
+    asyncio.run(test_worker_consumes_compaction_job_and_saves_checkpoint())
     print("memory worker smoke ok")
 
 

@@ -317,6 +317,7 @@ class MemorySQLiteStore:
         session_id: str,
         episode_id: Optional[str] = None,
         job_type: Optional[str] = None,
+        hydrate: bool = False,
     ) -> List[Dict[str, Any]]:
         clauses = ["session_id = ?"]
         params: List[Any] = [session_id]
@@ -335,7 +336,66 @@ class MemorySQLiteStore:
                 """,
                 params,
             ).fetchall()
-            return [_row_to_dict(row) for row in rows]
+            artifacts = [_row_to_dict(row) for row in rows]
+            return [_hydrate_pipeline_artifact(artifact) for artifact in artifacts] if hydrate else artifacts
+
+    def get_pipeline_artifact(
+        self,
+        *,
+        session_id: str,
+        stage_name: str,
+        episode_id: Optional[str] = None,
+        job_type: Optional[str] = None,
+        contract_version: Optional[str] = None,
+        hydrate: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        clauses = ["session_id = ?", "stage_name = ?"]
+        params: List[Any] = [session_id, stage_name]
+        if episode_id is not None:
+            clauses.append("episode_id = ?")
+            params.append(episode_id)
+        if job_type is not None:
+            clauses.append("job_type = ?")
+            params.append(job_type)
+        if contract_version is not None:
+            clauses.append("contract_version = ?")
+            params.append(contract_version)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT * FROM memory_pipeline_artifacts
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at DESC, stage_index DESC
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+            if row is None:
+                return None
+            artifact = _row_to_dict(row)
+            return _hydrate_pipeline_artifact(artifact) if hydrate else artifact
+
+    def get_pipeline_stage_output(
+        self,
+        *,
+        session_id: str,
+        stage_name: str,
+        episode_id: Optional[str] = None,
+        job_type: Optional[str] = None,
+        contract_version: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        artifact = self.get_pipeline_artifact(
+            session_id=session_id,
+            episode_id=episode_id,
+            job_type=job_type,
+            stage_name=stage_name,
+            contract_version=contract_version,
+            hydrate=True,
+        )
+        if artifact is None:
+            return None
+        output_payload = artifact.get("output")
+        return output_payload if isinstance(output_payload, dict) else {}
 
     def persist_observation(
         self,
@@ -872,6 +932,33 @@ class MemorySQLiteStore:
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
     return {key: row[key] for key in row.keys()}
+
+
+def _hydrate_pipeline_artifact(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    hydrated = dict(artifact)
+    hydrated["input"] = _loads_json_dict(hydrated.get("input_json"))
+    hydrated["output"] = _loads_json_dict(hydrated.get("output_json"))
+    hydrated["notes"] = _loads_json_list(hydrated.get("notes_json"))
+    payload = _loads_json_dict(hydrated.get("payload_json"))
+    if payload:
+        hydrated["payload"] = payload
+    return hydrated
+
+
+def _loads_json_dict(value: Any) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _loads_json_list(value: Any) -> List[Any]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _query_terms(query: str) -> List[str]:

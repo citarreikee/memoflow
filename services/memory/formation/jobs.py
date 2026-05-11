@@ -152,6 +152,21 @@ class MemoryFormationJobRunner:
         self.queue.complete(job.job_id, result=result.to_debug_dict())
         return result
 
+    def load_stage_output(
+        self,
+        *,
+        session_id: str,
+        stage_name: str,
+        episode_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        return MemorySQLiteStore.from_settings().get_pipeline_stage_output(
+            session_id=session_id,
+            episode_id=episode_id,
+            job_type="memory_formation",
+            stage_name=stage_name,
+            contract_version=FORMATION_PIPELINE_CONTRACT_VERSION,
+        )
+
     def _build_stage_trace(
         self,
         *,

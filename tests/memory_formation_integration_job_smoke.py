@@ -115,10 +115,36 @@ async def test_queued_formation_emits_integration_plan() -> None:
             session_id="session-integration",
             episode_id="ep_replaces_sidecar",
             job_type="memory_formation",
+            hydrate=True,
         )
         assert [artifact["stage_name"] for artifact in stored_artifacts] == stage_names
         assert stored_artifacts[0]["contract_version"] == "formation_job_pipeline_v1"
         assert stored_artifacts[0]["status"] == "succeeded"
+        assert stored_artifacts[0]["output"].get("observation_count", 0) >= 1
+        candidate_artifact = store.get_pipeline_artifact(
+            session_id="session-integration",
+            episode_id="ep_replaces_sidecar",
+            job_type="memory_formation",
+            stage_name="candidate_formation",
+            contract_version="formation_job_pipeline_v1",
+        )
+        assert candidate_artifact is not None
+        assert candidate_artifact["input"].get("observation_count", 0) >= 1
+        assert candidate_artifact["output"].get("candidate_count", 0) >= 1
+        stage_output = store.get_pipeline_stage_output(
+            session_id="session-integration",
+            episode_id="ep_replaces_sidecar",
+            job_type="memory_formation",
+            stage_name="write_planning",
+            contract_version="formation_job_pipeline_v1",
+        )
+        assert stage_output is not None
+        assert stage_output.get("plan_count", 0) >= 1
+        assert runner.load_stage_output(
+            session_id="session-integration",
+            episode_id="ep_replaces_sidecar",
+            stage_name="write_planning",
+        ) == stage_output
         assert integration.get("enabled") is True
         assert integration.get("candidate_count", 0) >= 1
         assert integration.get("snapshot_count", 0) >= 1

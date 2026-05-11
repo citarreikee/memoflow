@@ -91,6 +91,7 @@ async def test_queued_formation_emits_integration_plan() -> None:
         integration = completed.result.get("memory_integration") or {}
         write_plans = completed.result.get("plans") or []
         stage_names = [stage.get("name") for stage in completed.result.get("pipeline_stages") or []]
+        artifacts = completed.result.get("pipeline_artifacts") or {}
         plans = integration.get("plans") or []
         actions = [entry.get("plan", {}).get("action") for entry in plans]
 
@@ -108,6 +109,16 @@ async def test_queued_formation_emits_integration_plan() -> None:
         persistence_stage = next(stage for stage in completed.result["pipeline_stages"] if stage["name"] == "sqlite_persistence")
         assert integration_stage["status"] == "succeeded"
         assert persistence_stage["outputs"].get("observation_count", 0) >= 1
+        assert artifacts.get("contract_version") == "formation_job_pipeline_v1"
+        assert artifacts.get("artifact_count") == len(stage_names)
+        stored_artifacts = store.list_pipeline_artifacts(
+            session_id="session-integration",
+            episode_id="ep_replaces_sidecar",
+            job_type="memory_formation",
+        )
+        assert [artifact["stage_name"] for artifact in stored_artifacts] == stage_names
+        assert stored_artifacts[0]["contract_version"] == "formation_job_pipeline_v1"
+        assert stored_artifacts[0]["status"] == "succeeded"
         assert integration.get("enabled") is True
         assert integration.get("candidate_count", 0) >= 1
         assert integration.get("snapshot_count", 0) >= 1

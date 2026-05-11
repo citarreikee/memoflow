@@ -83,6 +83,26 @@ class MemorySQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_memory_observations_session_episode
                 ON memory_observations(session_id, episode_id);
 
+                CREATE TABLE IF NOT EXISTS memory_pipeline_artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    episode_id TEXT,
+                    job_type TEXT NOT NULL,
+                    contract_version TEXT NOT NULL,
+                    stage_name TEXT NOT NULL,
+                    stage_index INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    mode TEXT,
+                    input_json TEXT NOT NULL,
+                    output_json TEXT NOT NULL,
+                    notes_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_memory_pipeline_artifacts_lookup
+                ON memory_pipeline_artifacts(session_id, episode_id, job_type, stage_index);
+
                 CREATE TABLE IF NOT EXISTS memory_write_plans (
                     plan_id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL,
@@ -226,6 +246,96 @@ class MemorySQLiteStore:
                 ON memory_reindex_jobs(status, job_type);
                 """
             )
+
+    def persist_pipeline_artifact(
+        self,
+        *,
+        session_id: str,
+        episode_id: Optional[str],
+        job_type: str,
+        contract_version: str,
+        stage_index: int,
+        stage: Dict[str, Any],
+    ) -> str:
+        artifact_id = f"artifact_{uuid.uuid4().hex}"
+        input_payload = stage.get("inputs") if isinstance(stage.get("inputs"), dict) else {}
+        output_payload = stage.get("outputs") if isinstance(stage.get("outputs"), dict) else {}
+        notes_payload = stage.get("notes") if isinstance(stage.get("notes"), list) else []
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_pipeline_artifacts (
+                    artifact_id, session_id, episode_id, job_type, contract_version, stage_name,
+                    stage_index, status, mode, input_json, output_json, notes_json, created_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact_id,
+                    session_id,
+                    episode_id,
+                    job_type,
+                    contract_version,
+                    str(stage.get("name") or ""),
+                    stage_index,
+                    str(stage.get("status") or "unknown"),
+                    str(stage.get("mode") or "") or None,
+                    json.dumps(input_payload, ensure_ascii=False),
+                    json.dumps(output_payload, ensure_ascii=False),
+                    json.dumps(notes_payload, ensure_ascii=False),
+                    utc_now(),
+                    json.dumps(stage, ensure_ascii=False),
+                ),
+            )
+        return artifact_id
+
+    def persist_pipeline_artifacts(
+        self,
+        *,
+        session_id: str,
+        episode_id: Optional[str],
+        job_type: str,
+        contract_version: str,
+        stages: List[Dict[str, Any]],
+    ) -> List[str]:
+        artifact_ids: List[str] = []
+        for index, stage in enumerate(stages):
+            artifact_ids.append(
+                self.persist_pipeline_artifact(
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    job_type=job_type,
+                    contract_version=contract_version,
+                    stage_index=index,
+                    stage=stage,
+                )
+            )
+        return artifact_ids
+
+    def list_pipeline_artifacts(
+        self,
+        *,
+        session_id: str,
+        episode_id: Optional[str] = None,
+        job_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        clauses = ["session_id = ?"]
+        params: List[Any] = [session_id]
+        if episode_id is not None:
+            clauses.append("episode_id = ?")
+            params.append(episode_id)
+        if job_type is not None:
+            clauses.append("job_type = ?")
+            params.append(job_type)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM memory_pipeline_artifacts
+                WHERE {' AND '.join(clauses)}
+                ORDER BY stage_index ASC, created_at ASC
+                """,
+                params,
+            ).fetchall()
+            return [_row_to_dict(row) for row in rows]
 
     def persist_observation(
         self,
@@ -743,6 +853,7 @@ class MemorySQLiteStore:
     def count_rows(self, table: str) -> int:
         if table not in {
             "memory_observations",
+            "memory_pipeline_artifacts",
             "memory_candidates",
             "memory_write_plans",
             "memory_records",

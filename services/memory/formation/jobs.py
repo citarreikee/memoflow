@@ -41,6 +41,7 @@ class MemoryFormationJobResult:
     apply_result: Optional[MemoryApplyResult] = None
     integration_debug: Optional[Dict[str, Any]] = None
     stage_trace: List[MemoryFormationStageTrace] = field(default_factory=list)
+    artifact_debug: Optional[Dict[str, Any]] = None
 
     def to_debug_dict(self) -> Dict[str, Any]:
         debug = self.formation.to_debug_dict()
@@ -55,6 +56,8 @@ class MemoryFormationJobResult:
             debug["memory_storage"].update(self.apply_result.to_dict())
         if self.integration_debug:
             debug["memory_integration"] = self.integration_debug
+        if self.artifact_debug:
+            debug["pipeline_artifacts"] = self.artifact_debug
         return debug
 
 
@@ -106,6 +109,13 @@ class MemoryFormationJobRunner:
             storage_debug=storage_debug,
             apply_result=apply_result,
         )
+        artifact_debug: Optional[Dict[str, Any]] = None
+        if settings.MEMORY_STORAGE_ENABLED:
+            artifact_debug = self._persist_stage_artifacts(
+                session_id=session_id,
+                episode_payload=episode_payload,
+                stage_trace=stage_trace,
+            )
         return MemoryFormationJobResult(
             formation=formation,
             write_result=write_result,
@@ -113,6 +123,7 @@ class MemoryFormationJobRunner:
             apply_result=apply_result,
             integration_debug=integration_debug,
             stage_trace=stage_trace,
+            artifact_debug=artifact_debug,
         )
 
     def schedule(self, *, session_id: str, episode_payload: Dict[str, Any], workspace_dir: Optional[str] = None) -> MemoryJob:
@@ -245,6 +256,29 @@ class MemoryFormationJobRunner:
             )
         )
         return stages
+
+    def _persist_stage_artifacts(
+        self,
+        *,
+        session_id: str,
+        episode_payload: Dict[str, Any],
+        stage_trace: List[MemoryFormationStageTrace],
+    ) -> Dict[str, Any]:
+        store = MemorySQLiteStore.from_settings()
+        episode_id = str(episode_payload.get("episode_id") or "") or None
+        artifact_ids = store.persist_pipeline_artifacts(
+            session_id=session_id,
+            episode_id=episode_id,
+            job_type="memory_formation",
+            contract_version=FORMATION_PIPELINE_CONTRACT_VERSION,
+            stages=[stage.to_dict() for stage in stage_trace],
+        )
+        return {
+            "enabled": True,
+            "contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
+            "artifact_count": len(artifact_ids),
+            "artifact_ids": artifact_ids,
+        }
 
 
     async def _plan_integrations(

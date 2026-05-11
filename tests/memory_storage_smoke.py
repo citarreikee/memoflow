@@ -56,6 +56,7 @@ async def run_storage_smoke() -> None:
 
             memory_store = MemorySQLiteStore(tmp, db_path=settings.MEMORY_STORAGE_DB_PATH)
             assert memory_store.count_rows("memory_observations") >= 1
+            assert memory_store.count_rows("memory_pipeline_artifacts") >= 1
             assert memory_store.count_rows("memory_candidates") >= 1
             assert memory_store.count_rows("memory_write_plans") >= 1
             assert memory_store.count_rows("memory_records") >= 1

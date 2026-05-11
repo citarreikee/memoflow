@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from config import settings
 from services.memory.compaction_jobs import COMPACTION_JOB_TYPE, MemoryCompactionJobRunner
-from services.memory.formation.jobs import MemoryFormationJobRunner
+from services.memory.formation.jobs import FORMATION_LEGACY_JOB_TYPE, FORMATION_STAGED_JOB_TYPES, MemoryFormationJobRunner
 from services.memory.jobs import MemoryJob, MemoryJobQueue
 from services.memory.session_store import SessionStore
 
@@ -85,9 +85,11 @@ class MemoryWorker:
         return results
 
     async def _dispatch(self, job: MemoryJob) -> Dict[str, Any]:
-        if job.job_type == "memory_formation":
+        if job.job_type == FORMATION_LEGACY_JOB_TYPE:
             result = await self.formation_runner.run_queued_job(job)
             return result.to_debug_dict()
+        if job.job_type in FORMATION_STAGED_JOB_TYPES:
+            return await self.formation_runner.run_staged_job(job)
         if job.job_type == COMPACTION_JOB_TYPE:
             result = await self.compaction_runner.run_queued_job(job)
             return result.to_debug_dict()

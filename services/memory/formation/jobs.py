@@ -4,12 +4,15 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 from config import settings
+from services.memory.formation.extractor import should_trigger_extraction
 from services.memory.formation.integration_llm import plan_memory_integration_with_llm
 from services.memory.formation.integration_planner import plan_memory_integration
 from services.memory.formation.integration_schemas import MemoryIntegrationPlan
 from services.memory.formation.mutation_planner import build_write_plans
 from services.memory.formation.neighborhood import MemoryNeighborhoodRepository
 from services.memory.formation.pipeline import MemoryFormationResult, run_memory_formation_dry_run
+from services.memory.formation.pipeline import _extract_observations, _form_candidates
+from services.memory.formation.schemas import MemoryCandidateLite, MemoryObservation, MemoryWritePlan, normalize_candidate, normalize_observation
 from services.memory.formation.shape_planner import plan_storage_shape
 from services.memory.jobs import MemoryJob, MemoryJobQueue
 from services.memory.storage.applier import MemoryApplyResult, MemoryWriteApplier
@@ -18,6 +21,19 @@ from services.memory.stores.dry_run import DryRunWriteResult, write_dry_run_outp
 
 
 FORMATION_PIPELINE_CONTRACT_VERSION = "formation_job_pipeline_v1"
+FORMATION_LEGACY_JOB_TYPE = "memory_formation"
+FORMATION_OBSERVATION_JOB_TYPE = "memory_observation"
+FORMATION_CANDIDATE_JOB_TYPE = "memory_candidate_formation"
+FORMATION_INTEGRATION_JOB_TYPE = "memory_integration_routing"
+FORMATION_WRITE_JOB_TYPE = "memory_write_planning"
+FORMATION_APPLY_JOB_TYPE = "memory_safe_apply"
+FORMATION_STAGED_JOB_TYPES = {
+    FORMATION_OBSERVATION_JOB_TYPE,
+    FORMATION_CANDIDATE_JOB_TYPE,
+    FORMATION_INTEGRATION_JOB_TYPE,
+    FORMATION_WRITE_JOB_TYPE,
+    FORMATION_APPLY_JOB_TYPE,
+}
 
 
 @dataclass(frozen=True)
@@ -128,7 +144,7 @@ class MemoryFormationJobRunner:
 
     def schedule(self, *, session_id: str, episode_payload: Dict[str, Any], workspace_dir: Optional[str] = None) -> MemoryJob:
         return self.queue.enqueue(
-            job_type="memory_formation",
+            job_type=FORMATION_LEGACY_JOB_TYPE,
             session_id=session_id,
             episode_id=str(episode_payload.get("episode_id") or "") or None,
             priority=50,
@@ -142,6 +158,27 @@ class MemoryFormationJobRunner:
             },
         )
 
+    def schedule_staged(
+        self,
+        *,
+        session_id: str,
+        episode_payload: Dict[str, Any],
+        workspace_dir: Optional[str] = None,
+    ) -> MemoryJob:
+        return self.queue.enqueue(
+            job_type=FORMATION_OBSERVATION_JOB_TYPE,
+            session_id=session_id,
+            episode_id=str(episode_payload.get("episode_id") or "") or None,
+            priority=40,
+            payload={
+                "session_id": session_id,
+                "episode_payload": episode_payload,
+                "workspace_dir": workspace_dir,
+                "pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
+                "staged": True,
+            },
+        )
+
     async def run_queued_job(self, job: MemoryJob) -> MemoryFormationJobResult:
         payload = job.payload or {}
         result = await self.run(
@@ -151,6 +188,19 @@ class MemoryFormationJobRunner:
         )
         self.queue.complete(job.job_id, result=result.to_debug_dict())
         return result
+
+    async def run_staged_job(self, job: MemoryJob) -> Dict[str, Any]:
+        if job.job_type == FORMATION_OBSERVATION_JOB_TYPE:
+            return await self._run_observation_job(job)
+        if job.job_type == FORMATION_CANDIDATE_JOB_TYPE:
+            return await self._run_candidate_job(job)
+        if job.job_type == FORMATION_INTEGRATION_JOB_TYPE:
+            return await self._run_integration_job(job)
+        if job.job_type == FORMATION_WRITE_JOB_TYPE:
+            return await self._run_write_job(job)
+        if job.job_type == FORMATION_APPLY_JOB_TYPE:
+            return await self._run_apply_job(job)
+        raise ValueError(f"unsupported_formation_stage_job:{job.job_type}")
 
     def load_stage_output(
         self,
@@ -166,6 +216,201 @@ class MemoryFormationJobRunner:
             stage_name=stage_name,
             contract_version=FORMATION_PIPELINE_CONTRACT_VERSION,
         )
+
+    async def _run_observation_job(self, job: MemoryJob) -> Dict[str, Any]:
+        payload = job.payload or {}
+        session_id = str(payload.get("session_id") or job.session_id or "")
+        episode_payload = payload.get("episode_payload") or {}
+        episode_id = str(episode_payload.get("episode_id") or job.episode_id or "")
+        if not should_trigger_extraction(episode_payload):
+            stage = MemoryFormationStageTrace(
+                name="observation_extraction",
+                status="skipped",
+                inputs={"episode_count": 1 if episode_id else 0},
+                outputs={"observation_count": 0, "observations": []},
+                mode="trigger_policy_noop",
+            )
+            artifact_debug = self._persist_single_stage_artifact(session_id=session_id, episode_id=episode_id, stage=stage)
+            result = {
+                "pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
+                "stage": stage.to_dict(),
+                "pipeline_artifacts": artifact_debug,
+                "done": True,
+                "skipped_reason": "trigger_policy_noop",
+            }
+            self.queue.complete(job.job_id, result=result)
+            return result
+        observations, observation_debug = await _extract_observations(episode_payload)
+        stage = MemoryFormationStageTrace(
+            name="observation_extraction",
+            status="succeeded" if observations else "empty",
+            inputs={"episode_count": 1 if episode_id else 0},
+            outputs={"observation_count": len(observations), "observations": [item.to_dict() for item in observations]},
+            mode=str(observation_debug.get("mode") or "unknown"),
+        )
+        store = MemorySQLiteStore.from_settings()
+        if settings.MEMORY_STORAGE_ENABLED:
+            store.persist_observations(
+                session_id=session_id,
+                observations=observations,
+                extractor_mode=str(observation_debug.get("mode") or settings.MEMORY_FORMATION_EXTRACTOR),
+                extractor_model=observation_debug.get("model") if isinstance(observation_debug.get("model"), str) else None,
+                status="extracted",
+            )
+        artifact_debug = self._persist_single_stage_artifact(
+            session_id=session_id,
+            episode_id=episode_id,
+            stage=stage,
+        )
+        next_job = self.queue.enqueue(
+            job_type=FORMATION_CANDIDATE_JOB_TYPE,
+            session_id=session_id,
+            episode_id=episode_id or None,
+            priority=45,
+            payload={**payload, "observations": [item.to_dict() for item in observations], "observation_debug": observation_debug},
+        )
+        result = {
+            "pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
+            "stage": stage.to_dict(),
+            "pipeline_artifacts": artifact_debug,
+            "next_job_id": next_job.job_id,
+            "next_job_type": next_job.job_type,
+        }
+        self.queue.complete(job.job_id, result=result)
+        return result
+
+    async def _run_candidate_job(self, job: MemoryJob) -> Dict[str, Any]:
+        payload = job.payload or {}
+        session_id = str(payload.get("session_id") or job.session_id or "")
+        episode_payload = payload.get("episode_payload") or {}
+        episode_id = str(episode_payload.get("episode_id") or job.episode_id or "")
+        raw_observations = payload.get("observations") if isinstance(payload.get("observations"), list) else []
+        observations = [
+            normalize_observation(raw, fallback_id=str(raw.get("observation_id") or f"obs_{index}"), episode_id=episode_id)
+            for index, raw in enumerate(raw_observations)
+            if isinstance(raw, dict)
+        ]
+        candidates, formation_debug = await _form_candidates(episode_payload, observations)
+        observation_first = bool(observations)
+        for candidate in candidates:
+            if observation_first and not candidate.source_observation_ids:
+                candidate.risk = "high"
+        stage = MemoryFormationStageTrace(
+            name="candidate_formation",
+            status="succeeded" if candidates else "empty",
+            inputs={"observation_count": len(observations)},
+            outputs={"candidate_count": len(candidates), "candidates": [item.to_dict() for item in candidates]},
+            mode=str(formation_debug.get("mode") or "unknown"),
+            notes=[note for note, enabled in {"observation_first": observation_first, "legacy_candidate_fallback": not observation_first and bool(candidates)}.items() if enabled],
+        )
+        artifact_debug = self._persist_single_stage_artifact(session_id=session_id, episode_id=episode_id, stage=stage)
+        next_job_type = FORMATION_INTEGRATION_JOB_TYPE if settings.MEMORY_STORAGE_ENABLED else FORMATION_WRITE_JOB_TYPE
+        next_job = self.queue.enqueue(
+            job_type=next_job_type,
+            session_id=session_id,
+            episode_id=episode_id or None,
+            priority=50,
+            payload={**payload, "candidates": [item.to_dict() for item in candidates], "formation_debug": formation_debug},
+        )
+        result = {
+            "pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
+            "stage": stage.to_dict(),
+            "pipeline_artifacts": artifact_debug,
+            "next_job_id": next_job.job_id,
+            "next_job_type": next_job.job_type,
+        }
+        self.queue.complete(job.job_id, result=result)
+        return result
+
+    async def _run_integration_job(self, job: MemoryJob) -> Dict[str, Any]:
+        payload = job.payload or {}
+        session_id = str(payload.get("session_id") or job.session_id or "")
+        episode_id = str((payload.get("episode_payload") or {}).get("episode_id") or job.episode_id or "")
+        candidates = _candidates_from_payload(payload.get("candidates"))
+        formation = MemoryFormationResult(True, [episode_id] if episode_id else [], [], candidates, [])
+        integration_debug, integration_plans = await self._plan_integrations(
+            session_id=session_id,
+            workspace_dir=payload.get("workspace_dir"),
+            formation=formation,
+        )
+        stage = MemoryFormationStageTrace(
+            name="integration_routing",
+            status="succeeded",
+            inputs={"candidate_count": integration_debug.get("candidate_count", 0)},
+            outputs={"snapshot_count": integration_debug.get("snapshot_count", 0), "action_counts": integration_debug.get("action_counts", {}), "integration_plans": [item.to_dict() for item in integration_plans]},
+            mode="rule_or_llm_integration",
+        )
+        artifact_debug = self._persist_single_stage_artifact(session_id=session_id, episode_id=episode_id, stage=stage)
+        next_job = self.queue.enqueue(
+            job_type=FORMATION_WRITE_JOB_TYPE,
+            session_id=session_id,
+            episode_id=episode_id or None,
+            priority=55,
+            payload={**payload, "integration_debug": integration_debug, "integration_plans": [item.to_dict() for item in integration_plans]},
+        )
+        result = {"pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION, "stage": stage.to_dict(), "memory_integration": integration_debug, "pipeline_artifacts": artifact_debug, "next_job_id": next_job.job_id, "next_job_type": next_job.job_type}
+        self.queue.complete(job.job_id, result=result)
+        return result
+
+    async def _run_write_job(self, job: MemoryJob) -> Dict[str, Any]:
+        payload = job.payload or {}
+        session_id = str(payload.get("session_id") or job.session_id or "")
+        episode_id = str((payload.get("episode_payload") or {}).get("episode_id") or job.episode_id or "")
+        candidates = _candidates_from_payload(payload.get("candidates"))
+        integration_plans = _integration_plans_from_payload(payload.get("integration_plans"))
+        plans = build_write_plans(candidates, evidence_episode_ids=[episode_id] if episode_id else [], integration_plans=integration_plans)
+        write_result = None
+        if settings.MEMORY_FORMATION_DRY_RUN and plans:
+            write_result = write_dry_run_outputs(base_dir=self.log_dir, session_id=session_id, plans=plans)
+        stage = MemoryFormationStageTrace(
+            name="write_planning",
+            status="succeeded" if plans else "empty",
+            inputs={"candidate_count": len(candidates)},
+            outputs={"plan_count": len(plans), "plans": [item.to_dict() for item in plans]},
+            mode="integration_aware" if integration_plans else "preliminary",
+        )
+        artifact_debug = self._persist_single_stage_artifact(session_id=session_id, episode_id=episode_id, stage=stage)
+        next_job = self.queue.enqueue(
+            job_type=FORMATION_APPLY_JOB_TYPE,
+            session_id=session_id,
+            episode_id=episode_id or None,
+            priority=60,
+            payload={**payload, "plans": [item.to_dict() for item in plans]},
+        )
+        result = {"pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION, "stage": stage.to_dict(), "dry_run_writes": write_result.to_dict() if write_result else {}, "pipeline_artifacts": artifact_debug, "next_job_id": next_job.job_id, "next_job_type": next_job.job_type}
+        self.queue.complete(job.job_id, result=result)
+        return result
+
+    async def _run_apply_job(self, job: MemoryJob) -> Dict[str, Any]:
+        payload = job.payload or {}
+        session_id = str(payload.get("session_id") or job.session_id or "")
+        episode_payload = payload.get("episode_payload") or {}
+        episode_id = str(episode_payload.get("episode_id") or job.episode_id or "")
+        plans = _write_plans_from_payload(payload.get("plans"))
+        store = MemorySQLiteStore.from_settings()
+        observations = [normalize_observation(raw, fallback_id=str(raw.get("observation_id") or f"obs_{index}"), episode_id=episode_id) for index, raw in enumerate(payload.get("observations") or []) if isinstance(raw, dict)]
+        candidates = _candidates_from_payload(payload.get("candidates"))
+        if settings.MEMORY_STORAGE_ENABLED:
+            store.persist_observations(session_id=session_id, observations=observations, extractor_mode=str((payload.get("observation_debug") or {}).get("mode") or settings.MEMORY_FORMATION_EXTRACTOR), extractor_model=None, status="formed" if candidates else "extracted")
+            for candidate in candidates:
+                store.persist_candidate(session_id=session_id, episode_id=episode_id, candidate=candidate, extractor_mode=str((payload.get("formation_debug") or {}).get("mode") or settings.MEMORY_FORMATION_EXTRACTOR), extractor_model=None, status="planned" if plans else "extracted")
+            for plan in plans:
+                store.persist_write_plan(session_id=session_id, plan=plan)
+        apply_result = None
+        if settings.MEMORY_STORAGE_ENABLED and settings.MEMORY_STORAGE_APPLY_PLANS and plans:
+            apply_result = MemoryWriteApplier(store).apply_plans(session_id=session_id, workspace_dir=payload.get("workspace_dir"), plans=plans)
+        storage_debug = {"enabled": settings.MEMORY_STORAGE_ENABLED, "observation_count": len(observations), "candidate_count": len(candidates), "plan_count": len(plans), "applied": bool(apply_result)}
+        stage = MemoryFormationStageTrace(
+            name="safe_apply",
+            status="succeeded" if apply_result else "skipped",
+            inputs={"plan_count": len(plans)},
+            outputs=apply_result.to_dict() if apply_result else storage_debug,
+            mode="apply_plans_enabled" if settings.MEMORY_STORAGE_APPLY_PLANS else "apply_plans_disabled",
+        )
+        artifact_debug = self._persist_single_stage_artifact(session_id=session_id, episode_id=episode_id, stage=stage)
+        result = {"pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION, "stage": stage.to_dict(), "memory_storage": storage_debug, "pipeline_artifacts": artifact_debug, "done": True}
+        self.queue.complete(job.job_id, result=result)
+        return result
 
     def _build_stage_trace(
         self,
@@ -295,6 +540,29 @@ class MemoryFormationJobRunner:
             "artifact_ids": artifact_ids,
         }
 
+    def _persist_single_stage_artifact(
+        self,
+        *,
+        session_id: str,
+        episode_id: str,
+        stage: MemoryFormationStageTrace,
+    ) -> Dict[str, Any]:
+        store = MemorySQLiteStore.from_settings()
+        artifact_id = store.persist_pipeline_artifact(
+            session_id=session_id,
+            episode_id=episode_id or None,
+            job_type=FORMATION_LEGACY_JOB_TYPE,
+            contract_version=FORMATION_PIPELINE_CONTRACT_VERSION,
+            stage_index=_stage_index(stage.name),
+            stage=stage.to_dict(),
+        )
+        return {
+            "enabled": True,
+            "contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
+            "artifact_count": 1,
+            "artifact_ids": [artifact_id],
+        }
+
 
     async def _plan_integrations(
         self,
@@ -413,3 +681,84 @@ class MemoryFormationJobRunner:
             "applied": bool(apply_result),
         }
         return storage_debug, apply_result
+
+
+def _candidates_from_payload(value: Any) -> List[MemoryCandidateLite]:
+    raw_items = value if isinstance(value, list) else []
+    candidates: List[MemoryCandidateLite] = []
+    for index, raw in enumerate(raw_items):
+        if isinstance(raw, dict):
+            candidates.append(normalize_candidate(raw, fallback_id=str(raw.get("candidate_id") or f"cand_{index}")))
+    return candidates
+
+
+def _stage_index(stage_name: str) -> int:
+    order = {
+        "observation_extraction": 0,
+        "candidate_formation": 1,
+        "integration_routing": 2,
+        "write_planning": 3,
+        "dry_run_write": 4,
+        "sqlite_persistence": 5,
+        "safe_apply": 6,
+    }
+    return order.get(stage_name, 999)
+
+
+def _integration_plans_from_payload(value: Any) -> List[MemoryIntegrationPlan]:
+    raw_items = value if isinstance(value, list) else []
+    plans: List[MemoryIntegrationPlan] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        plans.append(
+            MemoryIntegrationPlan(
+                candidate_id=str(raw.get("candidate_id") or ""),
+                action=str(raw.get("action") or "NOOP"),
+                confidence=float(raw.get("confidence") or 0.0),
+                rationale=str(raw.get("rationale") or ""),
+                target_memory_id=raw.get("target_memory_id") if isinstance(raw.get("target_memory_id"), str) else None,
+                related_memory_ids=[str(item) for item in raw.get("related_memory_ids") or []],
+                graph_relations=raw.get("graph_relations") if isinstance(raw.get("graph_relations"), list) else [],
+                suggested_text=raw.get("suggested_text") if isinstance(raw.get("suggested_text"), str) else None,
+                memory_layers=[str(item) for item in raw.get("memory_layers") or []],
+                write_strategy=raw.get("write_strategy") if isinstance(raw.get("write_strategy"), str) else None,
+                related_existing_indices=[int(item) for item in raw.get("related_existing_indices") or []],
+                blocked_reasons=[str(item) for item in raw.get("blocked_reasons") or []],
+                needs_review_reasons=[str(item) for item in raw.get("needs_review_reasons") or []],
+            )
+        )
+    return plans
+
+
+def _write_plans_from_payload(value: Any) -> List[MemoryWritePlan]:
+    raw_items = value if isinstance(value, list) else []
+    plans: List[MemoryWritePlan] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        plans.append(
+            MemoryWritePlan(
+                plan_id=str(raw.get("plan_id") or ""),
+                candidate_id=str(raw.get("candidate_id") or ""),
+                action=str(raw.get("action") or "NOOP"),
+                canonical_store=raw.get("canonical_store") if isinstance(raw.get("canonical_store"), str) else None,
+                projections=[str(item) for item in raw.get("projections") or []],
+                scope=str(raw.get("scope") or "session"),
+                evidence_episode_ids=[str(item) for item in raw.get("evidence_episode_ids") or []],
+                confidence=float(raw.get("confidence") or 0.0),
+                status=str(raw.get("status") or "blocked"),
+                blocked_reasons=[str(item) for item in raw.get("blocked_reasons") or []],
+                type=str(raw.get("type") or "non_memory"),
+                text=str(raw.get("text") or ""),
+                reason=str(raw.get("reason") or ""),
+                integration_action=raw.get("integration_action") if isinstance(raw.get("integration_action"), str) else None,
+                write_strategy=raw.get("write_strategy") if isinstance(raw.get("write_strategy"), str) else None,
+                target_memory_id=raw.get("target_memory_id") if isinstance(raw.get("target_memory_id"), str) else None,
+                related_memory_ids=[str(item) for item in raw.get("related_memory_ids") or []],
+                graph_relations=raw.get("graph_relations") if isinstance(raw.get("graph_relations"), list) else [],
+                memory_layers=[str(item) for item in raw.get("memory_layers") or []],
+                needs_review_reasons=[str(item) for item in raw.get("needs_review_reasons") or []],
+            )
+        )
+    return plans

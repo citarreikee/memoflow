@@ -14,7 +14,13 @@ if str(ROOT_DIR) not in sys.path:
 
 from config import settings
 from services.memory.compaction_jobs import COMPACTION_JOB_TYPE, MemoryCompactionJobRunner
-from services.memory.formation.jobs import MemoryFormationJobRunner
+from services.memory.formation.jobs import (
+    FORMATION_APPLY_JOB_TYPE,
+    FORMATION_CANDIDATE_JOB_TYPE,
+    FORMATION_OBSERVATION_JOB_TYPE,
+    FORMATION_WRITE_JOB_TYPE,
+    MemoryFormationJobRunner,
+)
 from services.memory.jobs import DEAD, PENDING, SUCCEEDED, MemoryJobQueue
 from services.memory.session_store import SessionStore
 from services.memory.transcript_store import persist_episode
@@ -137,6 +143,46 @@ async def test_worker_run_until_idle_processes_multiple_jobs() -> None:
         assert len(queue.list_jobs(status=SUCCEEDED)) == 2
 
 
+async def test_worker_processes_staged_formation_chain() -> None:
+    with tempfile.TemporaryDirectory() as tmp, SettingsPatch(
+        MEMORY_DATA_DIR=tmp,
+        MEMORY_FORMATION_DRY_RUN=True,
+        MEMORY_STORAGE_ENABLED=False,
+        MEMORY_WRITE_PLAN_LOG_DIR=tmp,
+    ):
+        queue = MemoryJobQueue(tmp)
+        runner = MemoryFormationJobRunner(log_dir=tmp, queue=queue)
+        first_job = runner.schedule_staged(
+            session_id="session-staged-worker",
+            episode_payload={
+                "episode_id": "ep_worker_staged",
+                "session_id": "session-staged-worker",
+                "turn_index": 1,
+                "messages": [
+                    {"role": "user", "content": "Decision: staged formation jobs should advance one phase at a time."},
+                    {"role": "assistant", "content": "Acknowledged."},
+                ],
+            },
+            workspace_dir=tmp,
+        )
+        worker = MemoryWorker(queue=queue, formation_runner=runner, worker_id="staged-worker", retry_delay_seconds=0)
+
+        results = await worker.run_until_idle(max_jobs=10)
+        succeeded_types = [result.job_type for result in results if result.status == "succeeded"]
+
+        assert first_job.job_type == FORMATION_OBSERVATION_JOB_TYPE
+        assert succeeded_types == [
+            FORMATION_OBSERVATION_JOB_TYPE,
+            FORMATION_CANDIDATE_JOB_TYPE,
+            FORMATION_WRITE_JOB_TYPE,
+            FORMATION_APPLY_JOB_TYPE,
+        ]
+        assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_OBSERVATION_JOB_TYPE)) == 1
+        assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_CANDIDATE_JOB_TYPE)) == 1
+        assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_WRITE_JOB_TYPE)) == 1
+        assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_APPLY_JOB_TYPE)) == 1
+
+
 async def test_worker_requeues_stale_running_job_before_claim() -> None:
     with tempfile.TemporaryDirectory() as tmp, SettingsPatch(
         MEMORY_DATA_DIR=tmp,
@@ -248,6 +294,7 @@ def main() -> None:
     asyncio.run(test_worker_consumes_formation_job())
     asyncio.run(test_worker_retries_then_deads_unknown_job())
     asyncio.run(test_worker_run_until_idle_processes_multiple_jobs())
+    asyncio.run(test_worker_processes_staged_formation_chain())
     asyncio.run(test_worker_requeues_stale_running_job_before_claim())
     asyncio.run(test_worker_consumes_compaction_job_and_saves_checkpoint())
     print("memory worker smoke ok")

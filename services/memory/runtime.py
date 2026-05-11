@@ -574,7 +574,7 @@ class MemoryRuntime:
             return {"triggered": False, "episode_ids": [episode_payload["episode_id"]], "skipped_reason": "disabled"}
         try:
             if settings.MEMORY_FORMATION_BACKGROUND:
-                job = self.formation_jobs.schedule(
+                job = self.formation_jobs.schedule_staged(
                     session_id=session_id,
                     episode_payload=episode_payload,
                     workspace_dir=workspace_dir,

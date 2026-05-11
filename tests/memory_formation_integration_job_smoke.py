@@ -12,7 +12,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from config import settings
-from services.memory.formation.jobs import MemoryFormationJobRunner
+from services.memory.formation.jobs import FORMATION_APPLY_JOB_TYPE, FORMATION_CANDIDATE_JOB_TYPE, FORMATION_INTEGRATION_JOB_TYPE, FORMATION_OBSERVATION_JOB_TYPE, FORMATION_WRITE_JOB_TYPE, MemoryFormationJobRunner
 from services.memory.formation.schemas import MemoryWritePlan
 from services.memory.jobs import MemoryJobQueue, SUCCEEDED
 from services.memory.storage.applier import MemoryWriteApplier
@@ -159,8 +159,64 @@ async def test_queued_formation_emits_integration_plan() -> None:
         assert "relation_graph" in supersede_write_plan["projections"]
 
 
+async def test_staged_formation_uses_distinct_job_types() -> None:
+    with tempfile.TemporaryDirectory() as tmp, SettingsPatch(
+        MEMORY_DATA_DIR=tmp,
+        MEMORY_STORAGE_DB_PATH=str(Path(tmp) / "memory.sqlite3"),
+        MEMORY_FORMATION_DRY_RUN=False,
+        MEMORY_FORMATION_EXTRACTOR="rule",
+        MEMORY_STORAGE_ENABLED=True,
+        MEMORY_STORAGE_APPLY_PLANS=False,
+        MEMORY_WRITE_PLAN_LOG_DIR=tmp,
+    ):
+        queue = MemoryJobQueue(tmp)
+        runner = MemoryFormationJobRunner(log_dir=tmp, queue=queue)
+        first_job = runner.schedule_staged(
+            session_id="session-staged-integration",
+            workspace_dir=tmp,
+            episode_payload={
+                "episode_id": "ep_staged_integration",
+                "session_id": "session-staged-integration",
+                "turn_index": 1,
+                "messages": [
+                    {"role": "user", "content": "Decision: staged memory formation should split observation, candidate, integration, write, and apply jobs."},
+                    {"role": "assistant", "content": "Acknowledged."},
+                ],
+            },
+        )
+        worker = MemoryWorker(queue=queue, formation_runner=runner, worker_id="staged-integration-worker", retry_delay_seconds=0)
+
+        results = await worker.run_until_idle(max_jobs=10)
+        succeeded_types = [result.job_type for result in results if result.status == "succeeded"]
+        store = MemorySQLiteStore(tmp, db_path=settings.MEMORY_STORAGE_DB_PATH)
+        artifacts = store.list_pipeline_artifacts(
+            session_id="session-staged-integration",
+            episode_id="ep_staged_integration",
+            job_type="memory_formation",
+            hydrate=True,
+        )
+
+        assert first_job.job_type == FORMATION_OBSERVATION_JOB_TYPE
+        assert succeeded_types == [
+            FORMATION_OBSERVATION_JOB_TYPE,
+            FORMATION_CANDIDATE_JOB_TYPE,
+            FORMATION_INTEGRATION_JOB_TYPE,
+            FORMATION_WRITE_JOB_TYPE,
+            FORMATION_APPLY_JOB_TYPE,
+        ]
+        assert [artifact["stage_name"] for artifact in artifacts] == [
+            "observation_extraction",
+            "candidate_formation",
+            "integration_routing",
+            "write_planning",
+            "safe_apply",
+        ]
+        assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_INTEGRATION_JOB_TYPE)) == 1
+
+
 def main() -> None:
     asyncio.run(test_queued_formation_emits_integration_plan())
+    asyncio.run(test_staged_formation_uses_distinct_job_types())
     print("memory formation integration job smoke ok")
 
 

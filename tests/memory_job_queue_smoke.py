@@ -135,7 +135,7 @@ async def test_runtime_background_formation_enqueues_job() -> None:
         assert formation.get("queued") is True
         assert formation.get("job_id")
         assert "memory_formation_queued" in debug.get("events", [])
-        jobs = runtime.formation_jobs.queue.list_jobs(job_type="memory_formation")
+        jobs = runtime.formation_jobs.queue.list_jobs(job_type="memory_observation")
         assert len(jobs) == 1
         assert jobs[0].status == PENDING
         assert jobs[0].payload["session_id"] == session.session_id

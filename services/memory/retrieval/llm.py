@@ -12,8 +12,6 @@ from services.memory.retrieval.sufficiency import RuleSufficiencyEvaluator, Suff
 
 
 ALLOWED_INTENTS = set(INTENT_SOURCE_STRATEGIES.keys())
-ALLOWED_SOURCE_HINTS = {"semantic_kv", "vector_projection", "relation_graph", "review_items", "checkpoint"}
-ALLOWED_PATHS = {"exact_record", "lexical_projection", "graph_one_hop", "review_items"}
 
 
 async def reconstruct_queries_with_llm(
@@ -102,9 +100,8 @@ def _query_reconstruction_messages(*, user_message: str, recent_context_text: st
             "role": "system",
             "content": (
                 "You are a memory retrieval query reconstructor. Rewrite vague user language into executable memory search queries. "
-                "Return plain text containing one JSON object only. Do not include database IDs. "
-                "Schema: {\"queries\":[{\"query\":str,\"target_intents\":[str],\"target_source_hints\":[str],\"reason\":str}]} . "
-                f"Allowed intents: {sorted(ALLOWED_INTENTS)}. Allowed source hints: {sorted(ALLOWED_SOURCE_HINTS)}."
+                "Return plain text containing one JSON object only. Only rewrite the query; code will handle retrieval routing. "
+                "Schema: {\"queries\":[{\"query\":str,\"reason\":str}]} ."
             ),
         },
         {
@@ -123,7 +120,7 @@ def _intent_planning_messages(*, user_message: str, reconstructed_queries: List[
             "role": "system",
             "content": (
                 "You are a memory retrieval intent planner. Choose semantic retrieval intents only. "
-                "Return plain text containing one JSON object only. Do not choose database IDs, paths, or SQL. "
+                "Return plain text containing one JSON object only. Do not output retrieval sources; code maps intents to stores. "
                 "Schema: {\"intents\":[str],\"sufficiency_threshold\":\"low|medium|high\",\"reason\":str}. "
                 f"Allowed intents: {sorted(ALLOWED_INTENTS)}."
             ),
@@ -133,7 +130,7 @@ def _intent_planning_messages(*, user_message: str, reconstructed_queries: List[
             "content": json.dumps(
                 {
                     "user_message": user_message,
-                    "reconstructed_queries": [query.to_dict() for query in reconstructed_queries],
+                    "reconstructed_queries": _semantic_query_payload(reconstructed_queries),
                 },
                 ensure_ascii=False,
             ),
@@ -145,11 +142,8 @@ def _sufficiency_messages(*, plan: RetrievalPlan, candidates: List[RetrievalCand
     candidate_payload = [
         {
             "index": index,
-            "source": candidate.source,
             "authority": candidate.authority,
-            "intent": candidate.intent,
             "memory_type": candidate.memory_type,
-            "score": round(candidate.score, 4),
             "text": candidate.text[:500],
             "conflict": candidate.conflict,
         }
@@ -160,18 +154,15 @@ def _sufficiency_messages(*, plan: RetrievalPlan, candidates: List[RetrievalCand
             "role": "system",
             "content": (
                 "You are a memory retrieval sufficiency judge. Decide whether the candidate memories are enough for the current turn. "
-                "Return plain text containing one JSON object only. Do not hide conflicts and do not choose database IDs. "
-                "Schema: {\"sufficient\":bool,\"suggested_paths\":[str],\"reason\":str}. "
-                f"Allowed suggested paths: {sorted(ALLOWED_PATHS)}."
+                "Return plain text containing one JSON object only. Only judge semantic sufficiency; code will choose any fallback sources. "
+                "Schema: {\"sufficient\":bool,\"reason\":str}."
             ),
         },
         {
             "role": "user",
             "content": json.dumps(
                 {
-                    "intent": plan.intent.to_dict(),
-                    "current_paths": plan.paths,
-                    "candidate_count": len(candidates),
+                    "intent": _semantic_intent_payload(plan),
                     "candidates": candidate_payload,
                 },
                 ensure_ascii=False,
@@ -191,9 +182,7 @@ def _normalize_reconstructed_queries(payload: Any) -> List[ReconstructedQuery]:
         query = str(item.get("query") or "").strip()
         if not query:
             continue
-        intents = _allowed_list(item.get("target_intents"), ALLOWED_INTENTS)
-        hints = _allowed_list(item.get("target_source_hints"), ALLOWED_SOURCE_HINTS)
-        queries.append(ReconstructedQuery(query=query, target_intents=intents, target_source_hints=hints, reason=str(item.get("reason") or "")))
+        queries.append(ReconstructedQuery(query=query, reason=str(item.get("reason") or "")))
     return queries
 
 
@@ -218,13 +207,26 @@ def _queries_with_llm_intents(queries: List[ReconstructedQuery], payload: Any) -
 def _normalize_sufficiency_decision(payload: Any, *, fallback: SufficiencyDecision) -> SufficiencyDecision:
     if not isinstance(payload, dict):
         return fallback
-    suggested_paths = _allowed_list(payload.get("suggested_paths"), ALLOWED_PATHS)
+    sufficient = bool(payload.get("sufficient", fallback.sufficient))
     return SufficiencyDecision(
-        sufficient=bool(payload.get("sufficient", fallback.sufficient)),
+        sufficient=sufficient,
         level=fallback.level,
         reason=str(payload.get("reason") or fallback.reason),
-        suggested_paths=suggested_paths or fallback.suggested_paths,
+        suggested_paths=[] if sufficient else fallback.suggested_paths,
     )
+
+
+def _semantic_query_payload(queries: List[ReconstructedQuery]) -> List[Dict[str, str]]:
+    return [{"query": query.query, "reason": query.reason} for query in queries]
+
+
+def _semantic_intent_payload(plan: RetrievalPlan) -> Dict[str, Any]:
+    return {
+        "query": plan.intent.query,
+        "intents": plan.intent.intents,
+        "kind": plan.intent.kind,
+        "sufficiency_threshold": plan.intent.sufficiency_threshold,
+    }
 
 
 def _allowed_list(value: Any, allowed: set[str]) -> List[str]:

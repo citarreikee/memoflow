@@ -196,11 +196,14 @@ async def test_llm_retrieval_accepts_plain_text_json_fragments() -> None:
     async def fake_completion(*, provider: str, model: str, messages: list) -> str:
         system = messages[0]["content"]
         if "query reconstructor" in system:
-            return 'Here is the plan: {"queries":[{"query":"query reconstruction before retrieval intent planning","target_intents":["prior_decisions"],"target_source_hints":["semantic_kv"],"reason":"vague prior decision reference"}]}'
+            assert "target_source_hints" not in system
+            return 'Here is the plan: {"queries":[{"query":"query reconstruction before retrieval intent planning","reason":"vague prior decision reference"}]}'
         if "intent planner" in system:
+            assert "Do not output retrieval sources" in system
             return 'Result: {"intents":["prior_decisions"],"sufficiency_threshold":"medium","reason":"the user asks for a prior decision"}'
         if "sufficiency judge" in system:
-            return 'Decision: {"sufficient":true,"suggested_paths":[],"reason":"one authoritative decision was found"}'
+            assert "suggested_paths" not in system
+            return 'Decision: {"sufficient":true,"reason":"one authoritative decision was found"}'
         raise AssertionError(system)
 
     with _store() as store:

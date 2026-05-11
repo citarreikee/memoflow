@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from config import settings
-from services.memory.formation.schemas import MemoryCandidateLite, MemoryWritePlan
+from services.memory.formation.schemas import MemoryCandidateLite, MemoryObservation, MemoryWritePlan
 
 
 def utc_now() -> str:
@@ -62,6 +62,26 @@ class MemorySQLiteStore:
 
                 CREATE INDEX IF NOT EXISTS idx_memory_candidates_session_episode
                 ON memory_candidates(session_id, episode_id);
+
+                CREATE TABLE IF NOT EXISTS memory_observations (
+                    observation_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    episode_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    scope_hint TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    negative INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    extractor_mode TEXT NOT NULL,
+                    extractor_model TEXT,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_memory_observations_session_episode
+                ON memory_observations(session_id, episode_id);
 
                 CREATE TABLE IF NOT EXISTS memory_write_plans (
                     plan_id TEXT PRIMARY KEY,
@@ -205,6 +225,59 @@ class MemorySQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_memory_reindex_jobs_status
                 ON memory_reindex_jobs(status, job_type);
                 """
+            )
+
+    def persist_observation(
+        self,
+        *,
+        session_id: str,
+        observation: MemoryObservation,
+        extractor_mode: str,
+        extractor_model: Optional[str],
+        status: str = "extracted",
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO memory_observations (
+                    observation_id, session_id, episode_id, type, scope_hint, confidence,
+                    negative, text, reason, extractor_mode, extractor_model, status, created_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation.observation_id,
+                    session_id,
+                    observation.episode_id,
+                    observation.type,
+                    observation.scope_hint,
+                    observation.confidence,
+                    1 if observation.negative else 0,
+                    observation.text,
+                    observation.reason,
+                    extractor_mode,
+                    extractor_model,
+                    status,
+                    utc_now(),
+                    json.dumps(observation.to_dict(), ensure_ascii=False),
+                ),
+            )
+
+    def persist_observations(
+        self,
+        *,
+        session_id: str,
+        observations: List[MemoryObservation],
+        extractor_mode: str,
+        extractor_model: Optional[str],
+        status: str = "extracted",
+    ) -> None:
+        for observation in observations:
+            self.persist_observation(
+                session_id=session_id,
+                observation=observation,
+                extractor_mode=extractor_mode,
+                extractor_model=extractor_model,
+                status=status,
             )
 
     def persist_candidate(
@@ -669,6 +742,7 @@ class MemorySQLiteStore:
 
     def count_rows(self, table: str) -> int:
         if table not in {
+            "memory_observations",
             "memory_candidates",
             "memory_write_plans",
             "memory_records",

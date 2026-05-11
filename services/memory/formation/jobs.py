@@ -192,8 +192,19 @@ class MemoryFormationJobRunner:
         store = MemorySQLiteStore.from_settings()
         episode_id = str(episode_payload.get("episode_id") or "")
         extractor = formation.extractor_debug or {}
-        extractor_mode = str(extractor.get("mode") or settings.MEMORY_FORMATION_EXTRACTOR)
-        extractor_model = extractor.get("model") if isinstance(extractor.get("model"), str) else None
+        observation_debug = extractor.get("observation") if isinstance(extractor.get("observation"), dict) else {}
+        formation_debug = extractor.get("formation") if isinstance(extractor.get("formation"), dict) else {}
+        observation_mode = str(observation_debug.get("mode") or settings.MEMORY_FORMATION_EXTRACTOR)
+        observation_model = observation_debug.get("model") if isinstance(observation_debug.get("model"), str) else None
+        extractor_mode = str(formation_debug.get("mode") or settings.MEMORY_FORMATION_EXTRACTOR)
+        extractor_model = formation_debug.get("model") if isinstance(formation_debug.get("model"), str) else None
+        store.persist_observations(
+            session_id=session_id,
+            observations=formation.observations,
+            extractor_mode=observation_mode,
+            extractor_model=observation_model,
+            status="formed" if formation.candidates else "extracted",
+        )
         for candidate in formation.candidates:
             store.persist_candidate(
                 session_id=session_id,
@@ -214,6 +225,7 @@ class MemoryFormationJobRunner:
             )
         storage_debug = {
             "enabled": True,
+            "observation_count": len(formation.observations),
             "candidate_count": len(formation.candidates),
             "plan_count": len(formation.plans),
             "applied": bool(apply_result),

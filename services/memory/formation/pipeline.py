@@ -61,8 +61,14 @@ async def run_memory_formation_dry_run(episode: Dict[str, Any]) -> MemoryFormati
         )
     observations, observation_debug = await _extract_observations(episode)
     candidates, formation_debug = await _form_candidates(episode, observations)
+    observation_first = bool(observations)
+    for candidate in candidates:
+        if observation_first and not candidate.source_observation_ids:
+            candidate.risk = "high"
     plans = build_write_plans(candidates, evidence_episode_ids=episode_ids)
     extractor_debug = {
+        "observation_first": observation_first,
+        "legacy_candidate_fallback": not observation_first and bool(candidates),
         "observation": observation_debug,
         "formation": formation_debug,
     }

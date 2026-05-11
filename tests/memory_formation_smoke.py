@@ -15,6 +15,7 @@ from chat_history import SessionManager
 from config import settings
 from services.memory.formation.mutation_planner import build_write_plan
 from services.memory.formation.extractor import parse_candidate_json, parse_candidate_payload
+from services.memory.formation.pipeline import run_memory_formation_dry_run
 from services.memory.formation.schemas import MemoryCandidateLite
 from services.memory.runtime import MemoryRuntime
 from services.memory.session_store import SessionStore
@@ -123,6 +124,12 @@ async def run_runtime_smoke() -> None:
             assert formation.get("triggered") is True
             assert formation.get("candidate_count", 0) >= 1
             assert formation.get("planned_count", 0) + formation.get("needs_review_count", 0) >= 1
+            extractor = formation.get("extractor") or {}
+            assert extractor.get("observation_first") is True
+            assert extractor.get("legacy_candidate_fallback") is False
+            assert formation.get("observations")
+            for candidate in formation.get("candidates") or []:
+                assert candidate.get("source_observation_ids")
             records = WritePlanLog(tmp).read_all()
             assert records
             assert records[0]["session_id"] == session.session_id
@@ -139,6 +146,26 @@ async def run_runtime_smoke() -> None:
             settings.MEMORY_FORMATION_DRY_RUN = previous_dry_run
             settings.MEMORY_WRITE_PLAN_LOG_DIR = previous_log_dir
             settings.MEMORY_FORMATION_BACKGROUND = previous_background
+
+
+async def run_observation_first_contract() -> None:
+    result = await run_memory_formation_dry_run(
+        {
+            "episode_id": "ep_observation_first",
+            "messages": [
+                {"role": "user", "content": "Decision: observation-first formation is the mainline."},
+                {"role": "assistant", "content": "Confirmed."},
+            ],
+        }
+    )
+    debug = result.to_debug_dict()
+    assert result.triggered is True
+    assert result.observations
+    assert result.candidates
+    assert debug["extractor"]["observation_first"] is True
+    assert debug["extractor"]["legacy_candidate_fallback"] is False
+    for candidate in result.candidates:
+        assert candidate.source_observation_ids
 
 
 async def run_background_schedule_smoke() -> None:
@@ -184,6 +211,7 @@ async def run_background_schedule_smoke() -> None:
 
 def main() -> None:
     run_policy_smoke()
+    asyncio.run(run_observation_first_contract())
     asyncio.run(run_runtime_smoke())
     asyncio.run(run_background_schedule_smoke())
     print("memory formation smoke ok")

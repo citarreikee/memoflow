@@ -66,6 +66,19 @@ async def test_worker_consumes_formation_job() -> None:
         assert completed is not None
         assert completed.status == SUCCEEDED
         assert completed.result.get("triggered") is True
+        assert completed.result.get("pipeline_contract_version") == "formation_job_pipeline_v1"
+        stages = completed.result.get("pipeline_stages") or []
+        assert [stage.get("name") for stage in stages] == [
+            "observation_extraction",
+            "candidate_formation",
+            "integration_routing",
+            "write_planning",
+            "dry_run_write",
+            "sqlite_persistence",
+            "safe_apply",
+        ]
+        assert next(stage for stage in stages if stage.get("name") == "integration_routing")["status"] == "skipped"
+        assert next(stage for stage in stages if stage.get("name") == "dry_run_write")["status"] == "succeeded"
 
 
 async def test_worker_retries_then_deads_unknown_job() -> None:

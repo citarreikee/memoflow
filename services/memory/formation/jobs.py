@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 from config import settings
@@ -17,6 +17,22 @@ from services.memory.storage.sqlite_store import MemorySQLiteStore
 from services.memory.stores.dry_run import DryRunWriteResult, write_dry_run_outputs
 
 
+FORMATION_PIPELINE_CONTRACT_VERSION = "formation_job_pipeline_v1"
+
+
+@dataclass(frozen=True)
+class MemoryFormationStageTrace:
+    name: str
+    status: str
+    inputs: Dict[str, Any] = field(default_factory=dict)
+    outputs: Dict[str, Any] = field(default_factory=dict)
+    mode: Optional[str] = None
+    notes: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass
 class MemoryFormationJobResult:
     formation: MemoryFormationResult
@@ -24,9 +40,12 @@ class MemoryFormationJobResult:
     storage_debug: Optional[Dict[str, Any]] = None
     apply_result: Optional[MemoryApplyResult] = None
     integration_debug: Optional[Dict[str, Any]] = None
+    stage_trace: List[MemoryFormationStageTrace] = field(default_factory=list)
 
     def to_debug_dict(self) -> Dict[str, Any]:
         debug = self.formation.to_debug_dict()
+        debug["pipeline_contract_version"] = FORMATION_PIPELINE_CONTRACT_VERSION
+        debug["pipeline_stages"] = [stage.to_dict() for stage in self.stage_trace]
         if self.write_result:
             debug["dry_run_writes"] = self.write_result.to_dict()
         if self.storage_debug:
@@ -80,12 +99,20 @@ class MemoryFormationJobRunner:
                 workspace_dir=workspace_dir,
                 formation=formation,
             )
+        stage_trace = self._build_stage_trace(
+            formation=formation,
+            integration_debug=integration_debug,
+            write_result=write_result,
+            storage_debug=storage_debug,
+            apply_result=apply_result,
+        )
         return MemoryFormationJobResult(
             formation=formation,
             write_result=write_result,
             storage_debug=storage_debug,
             apply_result=apply_result,
             integration_debug=integration_debug,
+            stage_trace=stage_trace,
         )
 
     def schedule(self, *, session_id: str, episode_payload: Dict[str, Any], workspace_dir: Optional[str] = None) -> MemoryJob:
@@ -100,6 +127,7 @@ class MemoryFormationJobRunner:
                 "workspace_dir": workspace_dir,
                 "dry_run": settings.MEMORY_FORMATION_DRY_RUN,
                 "storage_enabled": settings.MEMORY_STORAGE_ENABLED,
+                "pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
             },
         )
 
@@ -112,6 +140,111 @@ class MemoryFormationJobRunner:
         )
         self.queue.complete(job.job_id, result=result.to_debug_dict())
         return result
+
+    def _build_stage_trace(
+        self,
+        *,
+        formation: MemoryFormationResult,
+        integration_debug: Optional[Dict[str, Any]],
+        write_result: Optional[DryRunWriteResult],
+        storage_debug: Optional[Dict[str, Any]],
+        apply_result: Optional[MemoryApplyResult],
+    ) -> List[MemoryFormationStageTrace]:
+        extractor = formation.extractor_debug or {}
+        observation_debug = extractor.get("observation") if isinstance(extractor.get("observation"), dict) else {}
+        candidate_debug = extractor.get("formation") if isinstance(extractor.get("formation"), dict) else {}
+        observation_first = bool(extractor.get("observation_first"))
+        legacy_fallback = bool(extractor.get("legacy_candidate_fallback"))
+        stages = [
+            MemoryFormationStageTrace(
+                name="observation_extraction",
+                status="succeeded" if formation.observations else "empty",
+                inputs={"episode_count": len(formation.episode_ids)},
+                outputs={"observation_count": len(formation.observations)},
+                mode=str(observation_debug.get("mode") or "unknown"),
+            ),
+            MemoryFormationStageTrace(
+                name="candidate_formation",
+                status="succeeded" if formation.candidates else "empty",
+                inputs={"observation_count": len(formation.observations)},
+                outputs={"candidate_count": len(formation.candidates)},
+                mode=str(candidate_debug.get("mode") or "unknown"),
+                notes=[note for note, enabled in {
+                    "observation_first": observation_first,
+                    "legacy_candidate_fallback": legacy_fallback,
+                }.items() if enabled],
+            ),
+        ]
+        if integration_debug is None:
+            stages.append(
+                MemoryFormationStageTrace(
+                    name="integration_routing",
+                    status="skipped",
+                    inputs={"candidate_count": len(formation.candidates)},
+                    outputs={},
+                    mode="storage_disabled",
+                )
+            )
+        else:
+            stages.append(
+                MemoryFormationStageTrace(
+                    name="integration_routing",
+                    status="succeeded",
+                    inputs={"candidate_count": integration_debug.get("candidate_count", 0)},
+                    outputs={
+                        "snapshot_count": integration_debug.get("snapshot_count", 0),
+                        "action_counts": integration_debug.get("action_counts", {}),
+                    },
+                    mode="rule_or_llm_integration",
+                )
+            )
+        stages.append(
+            MemoryFormationStageTrace(
+                name="write_planning",
+                status="succeeded" if formation.plans else "empty",
+                inputs={"candidate_count": len(formation.candidates)},
+                outputs={
+                    "plan_count": len(formation.plans),
+                    "planned_count": len([plan for plan in formation.plans if plan.status == "planned"]),
+                    "needs_review_count": len([plan for plan in formation.plans if plan.status == "needs_review"]),
+                    "blocked_count": len([plan for plan in formation.plans if plan.status == "blocked"]),
+                    "noop_count": len([plan for plan in formation.plans if plan.status == "noop"]),
+                },
+                mode="integration_aware" if integration_debug is not None else "preliminary",
+            )
+        )
+        stages.append(
+            MemoryFormationStageTrace(
+                name="dry_run_write",
+                status="succeeded" if write_result else "skipped",
+                inputs={"plan_count": len(formation.plans)},
+                outputs=write_result.to_dict() if write_result else {},
+                mode="dry_run_log" if settings.MEMORY_FORMATION_DRY_RUN else "dry_run_disabled",
+            )
+        )
+        stages.append(
+            MemoryFormationStageTrace(
+                name="sqlite_persistence",
+                status="succeeded" if storage_debug else "skipped",
+                inputs={
+                    "observation_count": len(formation.observations),
+                    "candidate_count": len(formation.candidates),
+                    "plan_count": len(formation.plans),
+                },
+                outputs=storage_debug or {},
+                mode="storage_enabled" if settings.MEMORY_STORAGE_ENABLED else "storage_disabled",
+            )
+        )
+        stages.append(
+            MemoryFormationStageTrace(
+                name="safe_apply",
+                status="succeeded" if apply_result else "skipped",
+                inputs={"plan_count": len(formation.plans)},
+                outputs=apply_result.to_dict() if apply_result else {},
+                mode="apply_plans_enabled" if settings.MEMORY_STORAGE_APPLY_PLANS else "apply_plans_disabled",
+            )
+        )
+        return stages
 
 
     async def _plan_integrations(

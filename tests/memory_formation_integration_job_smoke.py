@@ -90,9 +90,24 @@ async def test_queued_formation_emits_integration_plan() -> None:
         assert completed.status == SUCCEEDED
         integration = completed.result.get("memory_integration") or {}
         write_plans = completed.result.get("plans") or []
+        stage_names = [stage.get("name") for stage in completed.result.get("pipeline_stages") or []]
         plans = integration.get("plans") or []
         actions = [entry.get("plan", {}).get("action") for entry in plans]
 
+        assert completed.result.get("pipeline_contract_version") == "formation_job_pipeline_v1"
+        assert stage_names == [
+            "observation_extraction",
+            "candidate_formation",
+            "integration_routing",
+            "write_planning",
+            "dry_run_write",
+            "sqlite_persistence",
+            "safe_apply",
+        ]
+        integration_stage = next(stage for stage in completed.result["pipeline_stages"] if stage["name"] == "integration_routing")
+        persistence_stage = next(stage for stage in completed.result["pipeline_stages"] if stage["name"] == "sqlite_persistence")
+        assert integration_stage["status"] == "succeeded"
+        assert persistence_stage["outputs"].get("observation_count", 0) >= 1
         assert integration.get("enabled") is True
         assert integration.get("candidate_count", 0) >= 1
         assert integration.get("snapshot_count", 0) >= 1

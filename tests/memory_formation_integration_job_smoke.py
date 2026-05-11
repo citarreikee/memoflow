@@ -220,6 +220,28 @@ async def test_staged_formation_uses_distinct_job_types() -> None:
             assert "plans" not in job.payload
             assert job.payload.get("input_source") == "pipeline_artifact"
 
+        rerun_job = runner.schedule_rerun_from_stage(
+            session_id="session-staged-integration",
+            workspace_dir=tmp,
+            episode_payload={
+                "episode_id": "ep_staged_integration",
+                "session_id": "session-staged-integration",
+                "turn_index": 1,
+                "messages": [],
+            },
+            completed_stage_name="candidate_formation",
+        )
+        rerun_results = await worker.run_until_idle(max_jobs=10)
+        rerun_types = [result.job_type for result in rerun_results if result.status == "succeeded"]
+
+        assert rerun_job.job_type == FORMATION_INTEGRATION_JOB_TYPE
+        assert rerun_job.payload.get("rerun") is True
+        assert rerun_job.payload.get("rerun_from_stage") == "candidate_formation"
+        assert rerun_types == [FORMATION_INTEGRATION_JOB_TYPE, FORMATION_WRITE_JOB_TYPE, FORMATION_APPLY_JOB_TYPE]
+        assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_INTEGRATION_JOB_TYPE)) == 2
+        assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_WRITE_JOB_TYPE)) == 2
+        assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_APPLY_JOB_TYPE)) == 2
+
 
 def main() -> None:
     asyncio.run(test_queued_formation_emits_integration_plan())

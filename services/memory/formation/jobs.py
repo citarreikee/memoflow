@@ -179,6 +179,35 @@ class MemoryFormationJobRunner:
             },
         )
 
+    def schedule_rerun_from_stage(
+        self,
+        *,
+        session_id: str,
+        episode_payload: Dict[str, Any],
+        completed_stage_name: str,
+        workspace_dir: Optional[str] = None,
+    ) -> MemoryJob:
+        episode_id = str(episode_payload.get("episode_id") or "")
+        if not self.load_stage_output(session_id=session_id, episode_id=episode_id, stage_name=completed_stage_name):
+            raise ValueError(f"missing_stage_artifact:{completed_stage_name}")
+        next_job_type = _next_job_type_after_stage(completed_stage_name, storage_enabled=settings.MEMORY_STORAGE_ENABLED)
+        return self.queue.enqueue(
+            job_type=next_job_type,
+            session_id=session_id,
+            episode_id=episode_id or None,
+            priority=42,
+            payload={
+                "session_id": session_id,
+                "episode_payload": episode_payload,
+                "workspace_dir": workspace_dir,
+                "pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
+                "staged": True,
+                "rerun": True,
+                "rerun_from_stage": completed_stage_name,
+                "input_source": "pipeline_artifact",
+            },
+        )
+
     async def run_queued_job(self, job: MemoryJob) -> MemoryFormationJobResult:
         payload = job.payload or {}
         result = await self.run(
@@ -728,7 +757,7 @@ def _candidates_from_payload(value: Any) -> List[MemoryCandidateLite]:
 
 
 def _stage_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+    staged_payload = {
         "session_id": payload.get("session_id"),
         "episode_payload": payload.get("episode_payload") or {},
         "workspace_dir": payload.get("workspace_dir"),
@@ -736,6 +765,22 @@ def _stage_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "staged": True,
         "input_source": "pipeline_artifact",
     }
+    if payload.get("rerun"):
+        staged_payload["rerun"] = True
+        staged_payload["rerun_from_stage"] = payload.get("rerun_from_stage")
+    return staged_payload
+
+
+def _next_job_type_after_stage(stage_name: str, *, storage_enabled: bool) -> str:
+    if stage_name == "observation_extraction":
+        return FORMATION_CANDIDATE_JOB_TYPE
+    if stage_name == "candidate_formation":
+        return FORMATION_INTEGRATION_JOB_TYPE if storage_enabled else FORMATION_WRITE_JOB_TYPE
+    if stage_name == "integration_routing":
+        return FORMATION_WRITE_JOB_TYPE
+    if stage_name == "write_planning":
+        return FORMATION_APPLY_JOB_TYPE
+    raise ValueError(f"unsupported_rerun_stage:{stage_name}")
 
 
 def _stage_index(stage_name: str) -> int:

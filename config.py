@@ -101,7 +101,7 @@ class Settings:
             "yes",
             "on",
         }
-        self.MEMORY_RETRIEVAL_LLM_ENABLED: bool = os.getenv("MEMORY_RETRIEVAL_LLM_ENABLED", "false").strip().lower() in {
+        self.MEMORY_RETRIEVAL_LLM_ENABLED: bool = os.getenv("MEMORY_RETRIEVAL_LLM_ENABLED", "true").strip().lower() in {
             "1",
             "true",
             "yes",

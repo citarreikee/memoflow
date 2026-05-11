@@ -12,6 +12,7 @@ if str(ROOT_DIR) not in sys.path:
 from config import settings
 from chat_history import SessionManager
 from services.memory.formation.schemas import MemoryWritePlan
+from services.memory.retrieval import llm as retrieval_llm
 from services.memory.retrieval.pipeline import MemoryRetrievalPipeline
 from services.memory.runtime import MemoryRuntime, RuntimeInput
 from services.memory.session_store import SessionStore
@@ -191,6 +192,50 @@ async def test_finalize_records_retrieval_usage_audit() -> None:
         assert "retrieval_usage_audited" in debug["events"]
 
 
+async def test_llm_retrieval_accepts_plain_text_json_fragments() -> None:
+    async def fake_completion(*, provider: str, model: str, messages: list) -> str:
+        system = messages[0]["content"]
+        if "query reconstructor" in system:
+            return 'Here is the plan: {"queries":[{"query":"query reconstruction before retrieval intent planning","target_intents":["prior_decisions"],"target_source_hints":["semantic_kv"],"reason":"vague prior decision reference"}]}'
+        if "intent planner" in system:
+            return 'Result: {"intents":["prior_decisions"],"sufficiency_threshold":"medium","reason":"the user asks for a prior decision"}'
+        if "sufficiency judge" in system:
+            return 'Decision: {"sufficient":true,"suggested_paths":[],"reason":"one authoritative decision was found"}'
+        raise AssertionError(system)
+
+    with _store() as store:
+        previous_llm_enabled = settings.MEMORY_RETRIEVAL_LLM_ENABLED
+        previous_run_completion = retrieval_llm._run_completion
+        settings.MEMORY_RETRIEVAL_LLM_ENABLED = True
+        retrieval_llm._run_completion = fake_completion
+        try:
+            store.insert_memory_record(
+                scope="session",
+                namespace="session:retrieval2",
+                memory_type="decision",
+                key="decision:query-reconstruction-first",
+                value="Decision: use query reconstruction before retrieval intent planning.",
+                status="active",
+                confidence=0.9,
+                version=1,
+                source_plan_id="seed_plan_llm",
+                payload={},
+            )
+            pack = await MemoryRetrievalPipeline().run_async(
+                user_message="What did we decide last time?",
+                session_key="session:retrieval2",
+                token_budget=8000,
+                store=store,
+            )
+        finally:
+            retrieval_llm._run_completion = previous_run_completion
+            settings.MEMORY_RETRIEVAL_LLM_ENABLED = previous_llm_enabled
+        assert any("query reconstruction before retrieval intent planning" in item.text for item in pack.items)
+        assert pack.trace[0]["llm"]["query"]["mode"] == "llm_query_reconstruction"
+        assert pack.trace[0]["llm"]["plan"]["mode"] == "llm_intent_planning"
+        assert pack.trace[0]["llm"]["sufficiency"]["mode"] == "llm_sufficiency"
+
+
 class _store:
     def __enter__(self) -> MemorySQLiteStore:
         self.tmp = tempfile.TemporaryDirectory()
@@ -199,11 +244,13 @@ class _store:
             "MEMORY_STORAGE_DB_PATH": settings.MEMORY_STORAGE_DB_PATH,
             "MEMORY_STORAGE_ENABLED": settings.MEMORY_STORAGE_ENABLED,
             "MEMORY_RETRIEVAL_ENABLED": settings.MEMORY_RETRIEVAL_ENABLED,
+            "MEMORY_RETRIEVAL_LLM_ENABLED": settings.MEMORY_RETRIEVAL_LLM_ENABLED,
         }
         settings.MEMORY_DATA_DIR = self.tmp.name
         settings.MEMORY_STORAGE_DB_PATH = str(Path(self.tmp.name) / "memory.sqlite3")
         settings.MEMORY_STORAGE_ENABLED = True
         settings.MEMORY_RETRIEVAL_ENABLED = True
+        settings.MEMORY_RETRIEVAL_LLM_ENABLED = False
         return MemorySQLiteStore(self.tmp.name, db_path=settings.MEMORY_STORAGE_DB_PATH)
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
@@ -211,6 +258,7 @@ class _store:
         settings.MEMORY_STORAGE_DB_PATH = self.previous["MEMORY_STORAGE_DB_PATH"]
         settings.MEMORY_STORAGE_ENABLED = self.previous["MEMORY_STORAGE_ENABLED"]
         settings.MEMORY_RETRIEVAL_ENABLED = self.previous["MEMORY_RETRIEVAL_ENABLED"]
+        settings.MEMORY_RETRIEVAL_LLM_ENABLED = self.previous["MEMORY_RETRIEVAL_LLM_ENABLED"]
         self.tmp.cleanup()
 
 
@@ -222,4 +270,5 @@ if __name__ == "__main__":
     test_review_items_are_conflict_marked_not_authoritative()
     test_reflective_retrieval_uses_projection_fallback_once()
     asyncio.run(test_finalize_records_retrieval_usage_audit())
+    asyncio.run(test_llm_retrieval_accepts_plain_text_json_fragments())
     print("memory retrieval 2 contract ok")

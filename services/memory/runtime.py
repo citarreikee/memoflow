@@ -120,7 +120,7 @@ class MemoryRuntime:
                 trace=checkpoint_trace,
             )
 
-        retrieval_pack = self.retrieval.run(
+        retrieval_pack = await self.retrieval.run_async(
             user_message=runtime_input.user_message,
             session_key=runtime_input.session_key,
             token_budget=runtime_input.token_budget,

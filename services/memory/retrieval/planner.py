@@ -235,9 +235,6 @@ def _paths_from_strategies(strategies: List[SourceStrategy]) -> List[str]:
     sources: List[str] = []
     for strategy in strategies:
         sources.extend(strategy.primary_sources)
-        sources.extend(strategy.secondary_sources)
-        if strategy.vector_fallback:
-            sources.append("vector_projection")
     return _dedupe([source_to_path[source] for source in sources if source in source_to_path and source != "checkpoint"])
 
 

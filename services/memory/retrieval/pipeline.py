@@ -8,6 +8,7 @@ from services.memory.retrieval.query_reconstructor import RuleQueryReconstructor
 from services.memory.retrieval.ranker import build_retrieval_pack
 from services.memory.retrieval.repository import MemoryRetrievalRepository
 from services.memory.retrieval.schemas import RetrievalIntent, RetrievalPack
+from services.memory.retrieval.sufficiency import RuleSufficiencyEvaluator
 from services.memory.storage.sqlite_store import MemorySQLiteStore
 
 
@@ -46,6 +47,16 @@ class MemoryRetrievalPipeline:
         try:
             repository = MemoryRetrievalRepository(store or MemorySQLiteStore.from_settings())
             candidates = repository.search(plan)
+            sufficiency = RuleSufficiencyEvaluator().evaluate(plan=plan, candidates=candidates)
+            refined = False
+            if not sufficiency.sufficient and sufficiency.suggested_paths:
+                for path in sufficiency.suggested_paths:
+                    if path not in plan.paths:
+                        plan.paths.append(path)
+                refined_candidates = repository.search(plan)
+                candidates = _merge_candidates(candidates, refined_candidates)
+                refined = True
+                sufficiency = RuleSufficiencyEvaluator().evaluate(plan=plan, candidates=candidates)
             pack = build_retrieval_pack(plan, candidates)
             return RetrievalPack(
                 intent=pack.intent,
@@ -60,6 +71,8 @@ class MemoryRetrievalPipeline:
                         "reconstructed_queries": plan.intent.reconstructed_queries,
                         "source_strategies": [strategy.to_dict() for strategy in plan.source_strategies],
                         "budget_allocation": plan.budget_allocation,
+                        "sufficiency": sufficiency.to_dict(),
+                        "refined": refined,
                         "candidate_count": len(candidates),
                     },
                     *pack.trace,
@@ -73,3 +86,15 @@ class MemoryRetrievalPipeline:
                 estimated_chars=0,
                 trace=[{"decision": "failed", "reason": str(exc)}],
             )
+
+
+def _merge_candidates(existing, additional):
+    seen = set()
+    merged = []
+    for candidate in [*existing, *additional]:
+        key = candidate.memory_id or candidate.edge_id or candidate.projection_id or candidate.text
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(candidate)
+    return merged

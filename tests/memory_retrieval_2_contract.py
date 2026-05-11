@@ -104,6 +104,34 @@ def test_review_items_are_conflict_marked_not_authoritative() -> None:
         assert all(item.conflict for item in review_items)
 
 
+def test_reflective_retrieval_uses_projection_fallback_once() -> None:
+    with _store() as store:
+        plan = MemoryWritePlan(
+            plan_id="seed_projection_plan",
+            candidate_id="seed_projection_candidate",
+            action="ADD",
+            canonical_store=None,
+            projections=["vector_projection"],
+            scope="session",
+            evidence_episode_ids=["episode_projection"],
+            confidence=0.7,
+            status="planned",
+            type="decision",
+            text="Decision: retrieval fallback should inspect vector projections when canonical records miss.",
+            reason="seed projection fallback",
+        )
+        store.insert_vector_projection(memory_id=None, episode_id="episode_projection", plan=plan)
+        pack = MemoryRetrievalPipeline().run(
+            user_message="What was the decision about retrieval fallback projections?",
+            session_key="session:retrieval2",
+            token_budget=8000,
+            store=store,
+        )
+        assert any(item.source == "lexical_projection" for item in pack.items)
+        assert pack.trace[0]["refined"] is True
+        assert pack.trace[0]["sufficiency"]["sufficient"] is True
+
+
 async def test_finalize_records_retrieval_usage_audit() -> None:
     with _store() as store:
         session_store = SessionStore(settings.MEMORY_DATA_DIR)
@@ -192,5 +220,6 @@ if __name__ == "__main__":
     test_query_reconstruction_finds_prior_state()
     test_retrieval_dedupes_recent_context()
     test_review_items_are_conflict_marked_not_authoritative()
+    test_reflective_retrieval_uses_projection_fallback_once()
     asyncio.run(test_finalize_records_retrieval_usage_audit())
     print("memory retrieval 2 contract ok")

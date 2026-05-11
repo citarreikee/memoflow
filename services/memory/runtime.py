@@ -26,6 +26,7 @@ from services.memory.policy import (
     decide_prepare_policy,
 )
 from services.memory.retrieval.assembler import render_retrieval_message
+from services.memory.retrieval.audit import build_retrieval_usage_audit
 from services.memory.retrieval.pipeline import MemoryRetrievalPipeline
 from services.memory.runtime_events import RuntimeEventLog
 from services.memory.session_store import SessionStore, session_store
@@ -34,6 +35,18 @@ from services.memory.working_set import assemble_working_set
 
 
 RUNTIME_VERSION = "0.2"
+
+
+def _recent_context_text(history_messages: List[Any], *, max_messages: int = 6, max_chars: int = 4000) -> str:
+    recent = history_messages[-max_messages:] if history_messages else []
+    parts: List[str] = []
+    for message in recent:
+        item = history_message_to_dict(message)
+        content = item.get("content")
+        if content:
+            parts.append(str(content))
+    text = "\n".join(parts)
+    return text[-max_chars:]
 
 
 @dataclass
@@ -111,6 +124,7 @@ class MemoryRuntime:
             user_message=runtime_input.user_message,
             session_key=runtime_input.session_key,
             token_budget=runtime_input.token_budget,
+            recent_context_text=_recent_context_text(runtime_input.history_messages),
         )
         retrieval_message = render_retrieval_message(retrieval_pack)
         if retrieval_pack.items:
@@ -203,6 +217,7 @@ class MemoryRuntime:
         if not turn_messages:
             events.add("finalize_skipped", reason="last_turn_missing")
             return self._merge_finalize_debug(debug, events, None)
+        assistant_response = _last_assistant_response(turn_messages)
 
         turn_index = next_turn_index(self.store, session_id)
         episode_payload = build_episode_payload(
@@ -276,7 +291,27 @@ class MemoryRuntime:
             except Exception as exc:
                 events.add("post_turn_compaction_queue_failed", error=str(exc))
 
-        return self._merge_finalize_debug(debug, events, post_policy, saved_checkpoint, formation_debug=formation_debug)
+        retrieval_usage_audit = build_retrieval_usage_audit(
+            retrieval_pack=debug.get("retrieval") if isinstance(debug, dict) else None,
+            assistant_response=assistant_response,
+        )
+        if retrieval_usage_audit["items_retrieved"]:
+            events.add(
+                "retrieval_usage_audited",
+                items_retrieved=retrieval_usage_audit["items_retrieved"],
+                items_cited_by_model=retrieval_usage_audit["items_cited_by_model"],
+                items_ignored=retrieval_usage_audit["items_ignored"],
+                usage_rate=retrieval_usage_audit["usage_rate"],
+            )
+
+        return self._merge_finalize_debug(
+            debug,
+            events,
+            post_policy,
+            saved_checkpoint,
+            formation_debug=formation_debug,
+            retrieval_usage_audit=retrieval_usage_audit,
+        )
 
     def _build_state(
         self,
@@ -491,6 +526,7 @@ class MemoryRuntime:
         post_policy: Optional[RuntimePolicyDecision],
         saved_checkpoint: Optional[Dict[str, Any]] = None,
         formation_debug: Optional[Dict[str, Any]] = None,
+        retrieval_usage_audit: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         debug.setdefault("events", [])
         debug["events"].extend(events.names())
@@ -511,6 +547,8 @@ class MemoryRuntime:
         if formation_debug is not None:
             debug["memory_formation"] = formation_debug
         debug.setdefault("audit", {})
+        if retrieval_usage_audit is not None:
+            debug["audit"]["retrieval_usage"] = retrieval_usage_audit
         for event in events.to_dicts():
             event_type = event.get("type")
             data = event.get("data") or {}
@@ -601,6 +639,16 @@ def _collect_last_turn_messages(history_messages: List[Any]) -> List[Any]:
     if collected and getattr(collected[0], "role", None) != "user":
         return []
     return collected
+
+
+def _last_assistant_response(turn_messages: List[Any]) -> str:
+    for message in reversed(turn_messages):
+        if getattr(message, "role", None) != "assistant":
+            continue
+        content = getattr(message, "content", None)
+        if content:
+            return str(content)
+    return ""
 
 
 memory_runtime = MemoryRuntime(session_store)

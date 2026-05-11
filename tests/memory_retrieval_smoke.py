@@ -67,7 +67,8 @@ async def run_retrieval_smoke() -> None:
             )
 
             rendered = "\n".join(message.get("content", "") for message in package.messages)
-            assert "Relevant memory retrieved for this turn" in rendered
+            assert "Relevant memory package for this turn" in rendered
+            assert "Authoritative memories" in rendered
             assert "concise implementation plans" in rendered
             assert package.debug["retrieval"]["items"]
         finally:
@@ -84,4 +85,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

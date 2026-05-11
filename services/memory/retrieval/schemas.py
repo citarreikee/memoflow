@@ -5,6 +5,40 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass(frozen=True)
+class ReconstructedQuery:
+    query: str
+    target_intents: List[str] = field(default_factory=list)
+    target_source_hints: List[str] = field(default_factory=list)
+    reason: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SourceStrategy:
+    intent: str
+    primary_sources: List[str] = field(default_factory=list)
+    secondary_sources: List[str] = field(default_factory=list)
+    budget_ratio: Dict[str, float] = field(default_factory=dict)
+    vector_fallback: bool = False
+    min_primary_items: int = 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RetrievalBudgetAllocation:
+    total_chars: int
+    per_intent_chars: Dict[str, int] = field(default_factory=dict)
+    per_source_chars: Dict[str, int] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class RetrievalIntent:
     kind: str
     query: str
@@ -14,6 +48,9 @@ class RetrievalIntent:
     needs_time: bool = False
     needs_graph: bool = False
     needs_preferences: bool = False
+    intents: List[str] = field(default_factory=list)
+    reconstructed_queries: List[Dict[str, Any]] = field(default_factory=list)
+    sufficiency_threshold: str = "medium"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -29,6 +66,9 @@ class RetrievalPlan:
     max_pack_items: int
     max_pack_chars: int
     min_score: float
+    source_strategies: List[SourceStrategy] = field(default_factory=list)
+    budget_allocation: Dict[str, int] = field(default_factory=dict)
+    recent_context_text: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -49,6 +89,11 @@ class RetrievalCandidate:
     reason: str
     evidence_episode_ids: List[str] = field(default_factory=list)
     payload: Dict[str, Any] = field(default_factory=dict)
+    authority: str = "authoritative"
+    intent: str = ""
+    source_priority: float = 1.0
+    load_mode: str = "inline"
+    conflict: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -63,6 +108,11 @@ class RetrievalPackItem:
     text: str
     reason: str
     score: float
+    authority: str = "authoritative"
+    intent: str = ""
+    evidence_episode_ids: List[str] = field(default_factory=list)
+    load_mode: str = "inline"
+    conflict: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -84,4 +134,3 @@ class RetrievalPack:
             "estimated_chars": self.estimated_chars,
             "trace": self.trace,
         }
-

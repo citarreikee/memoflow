@@ -403,6 +403,43 @@ class MemorySQLiteStore:
             ).fetchall()
             return [_row_to_dict(row) for row in rows]
 
+    def search_review_items(
+        self,
+        *,
+        query: str,
+        session_id: str,
+        scopes: List[str],
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        terms = _query_terms(query)
+        clauses = ["status = 'pending_review'"]
+        params: List[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if scopes:
+            clauses.append(f"scope IN ({','.join(['?'] * len(scopes))})")
+            params.extend(scopes)
+        if terms:
+            term_clauses = []
+            for term in terms:
+                term_clauses.append("(LOWER(action) LIKE ? OR LOWER(reason) LIKE ? OR LOWER(payload_json) LIKE ?)")
+                pattern = f"%{term}%"
+                params.extend([pattern, pattern, pattern])
+            clauses.append(f"({' OR '.join(term_clauses)})")
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM memory_review_items
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [_row_to_dict(row) for row in rows]
+
     def insert_memory_record(
         self,
         *,

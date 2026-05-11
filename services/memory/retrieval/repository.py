@@ -19,6 +19,8 @@ class MemoryRetrievalRepository:
             candidates.extend(self._search_projections(plan))
         if "graph_one_hop" in plan.paths:
             candidates.extend(self._search_graph(plan))
+        if "review_items" in plan.paths:
+            candidates.extend(self._search_review_items(plan))
         return candidates
 
     def _search_records(self, plan: RetrievalPlan) -> List[RetrievalCandidate]:
@@ -45,6 +47,9 @@ class MemoryRetrievalRepository:
                     score=score,
                     reason="active_record_match",
                     payload=dict(row),
+                    authority="authoritative",
+                    intent=_candidate_intent(plan),
+                    source_priority=1.0,
                 )
             )
         return candidates
@@ -75,6 +80,9 @@ class MemoryRetrievalRepository:
                     score=score,
                     reason="projection_lexical_match",
                     payload=dict(row),
+                    authority="projection",
+                    intent=_candidate_intent(plan),
+                    source_priority=0.7,
                 )
             )
         return candidates
@@ -101,7 +109,46 @@ class MemoryRetrievalRepository:
                     score=score,
                     reason="graph_edge_match",
                     payload=dict(row),
+                    authority="authoritative",
+                    intent="dependency_relations",
+                    source_priority=0.9,
                 )
             )
         return candidates
 
+    def _search_review_items(self, plan: RetrievalPlan) -> List[RetrievalCandidate]:
+        rows = self.store.search_review_items(
+            query=plan.intent.query,
+            session_id=plan.namespace,
+            scopes=plan.scopes,
+            limit=plan.limit_per_path,
+        )
+        candidates: List[RetrievalCandidate] = []
+        for row in rows:
+            text = str(row.get("reason") or row.get("payload_json") or "").strip()
+            score = lexical_score(plan.intent.query, text) or 0.3
+            candidates.append(
+                RetrievalCandidate(
+                    source="review_items",
+                    memory_id=row.get("target_memory_id"),
+                    projection_id=None,
+                    edge_id=str(row.get("review_id") or ""),
+                    scope=str(row.get("scope") or ""),
+                    memory_type="review_item",
+                    text=text,
+                    score=score,
+                    reason="review_item_match",
+                    payload=dict(row),
+                    authority="review_only",
+                    intent="conflict_check",
+                    source_priority=0.55,
+                    conflict=True,
+                )
+            )
+        return candidates
+
+
+def _candidate_intent(plan: RetrievalPlan) -> str:
+    if plan.intent.intents:
+        return plan.intent.intents[0]
+    return plan.intent.kind

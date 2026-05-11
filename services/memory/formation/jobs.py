@@ -267,7 +267,7 @@ class MemoryFormationJobRunner:
             session_id=session_id,
             episode_id=episode_id or None,
             priority=45,
-            payload={**payload, "observations": [item.to_dict() for item in observations], "observation_debug": observation_debug},
+            payload=_stage_payload(payload),
         )
         result = {
             "pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
@@ -284,7 +284,12 @@ class MemoryFormationJobRunner:
         session_id = str(payload.get("session_id") or job.session_id or "")
         episode_payload = payload.get("episode_payload") or {}
         episode_id = str(episode_payload.get("episode_id") or job.episode_id or "")
-        raw_observations = payload.get("observations") if isinstance(payload.get("observations"), list) else []
+        observation_output = self.load_stage_output(
+            session_id=session_id,
+            episode_id=episode_id,
+            stage_name="observation_extraction",
+        ) or {}
+        raw_observations = observation_output.get("observations") if isinstance(observation_output.get("observations"), list) else []
         observations = [
             normalize_observation(raw, fallback_id=str(raw.get("observation_id") or f"obs_{index}"), episode_id=episode_id)
             for index, raw in enumerate(raw_observations)
@@ -310,7 +315,7 @@ class MemoryFormationJobRunner:
             session_id=session_id,
             episode_id=episode_id or None,
             priority=50,
-            payload={**payload, "candidates": [item.to_dict() for item in candidates], "formation_debug": formation_debug},
+            payload=_stage_payload(payload),
         )
         result = {
             "pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
@@ -326,7 +331,12 @@ class MemoryFormationJobRunner:
         payload = job.payload or {}
         session_id = str(payload.get("session_id") or job.session_id or "")
         episode_id = str((payload.get("episode_payload") or {}).get("episode_id") or job.episode_id or "")
-        candidates = _candidates_from_payload(payload.get("candidates"))
+        candidate_output = self.load_stage_output(
+            session_id=session_id,
+            episode_id=episode_id,
+            stage_name="candidate_formation",
+        ) or {}
+        candidates = _candidates_from_payload(candidate_output.get("candidates"))
         formation = MemoryFormationResult(True, [episode_id] if episode_id else [], [], candidates, [])
         integration_debug, integration_plans = await self._plan_integrations(
             session_id=session_id,
@@ -346,7 +356,7 @@ class MemoryFormationJobRunner:
             session_id=session_id,
             episode_id=episode_id or None,
             priority=55,
-            payload={**payload, "integration_debug": integration_debug, "integration_plans": [item.to_dict() for item in integration_plans]},
+            payload=_stage_payload(payload),
         )
         result = {"pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION, "stage": stage.to_dict(), "memory_integration": integration_debug, "pipeline_artifacts": artifact_debug, "next_job_id": next_job.job_id, "next_job_type": next_job.job_type}
         self.queue.complete(job.job_id, result=result)
@@ -356,8 +366,18 @@ class MemoryFormationJobRunner:
         payload = job.payload or {}
         session_id = str(payload.get("session_id") or job.session_id or "")
         episode_id = str((payload.get("episode_payload") or {}).get("episode_id") or job.episode_id or "")
-        candidates = _candidates_from_payload(payload.get("candidates"))
-        integration_plans = _integration_plans_from_payload(payload.get("integration_plans"))
+        candidate_output = self.load_stage_output(
+            session_id=session_id,
+            episode_id=episode_id,
+            stage_name="candidate_formation",
+        ) or {}
+        integration_output = self.load_stage_output(
+            session_id=session_id,
+            episode_id=episode_id,
+            stage_name="integration_routing",
+        ) or {}
+        candidates = _candidates_from_payload(candidate_output.get("candidates"))
+        integration_plans = _integration_plans_from_payload(integration_output.get("integration_plans"))
         plans = build_write_plans(candidates, evidence_episode_ids=[episode_id] if episode_id else [], integration_plans=integration_plans)
         write_result = None
         if settings.MEMORY_FORMATION_DRY_RUN and plans:
@@ -375,7 +395,7 @@ class MemoryFormationJobRunner:
             session_id=session_id,
             episode_id=episode_id or None,
             priority=60,
-            payload={**payload, "plans": [item.to_dict() for item in plans]},
+            payload=_stage_payload(payload),
         )
         result = {"pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION, "stage": stage.to_dict(), "dry_run_writes": write_result.to_dict() if write_result else {}, "pipeline_artifacts": artifact_debug, "next_job_id": next_job.job_id, "next_job_type": next_job.job_type}
         self.queue.complete(job.job_id, result=result)
@@ -386,14 +406,29 @@ class MemoryFormationJobRunner:
         session_id = str(payload.get("session_id") or job.session_id or "")
         episode_payload = payload.get("episode_payload") or {}
         episode_id = str(episode_payload.get("episode_id") or job.episode_id or "")
-        plans = _write_plans_from_payload(payload.get("plans"))
+        observation_output = self.load_stage_output(
+            session_id=session_id,
+            episode_id=episode_id,
+            stage_name="observation_extraction",
+        ) or {}
+        candidate_output = self.load_stage_output(
+            session_id=session_id,
+            episode_id=episode_id,
+            stage_name="candidate_formation",
+        ) or {}
+        write_output = self.load_stage_output(
+            session_id=session_id,
+            episode_id=episode_id,
+            stage_name="write_planning",
+        ) or {}
+        plans = _write_plans_from_payload(write_output.get("plans"))
         store = MemorySQLiteStore.from_settings()
-        observations = [normalize_observation(raw, fallback_id=str(raw.get("observation_id") or f"obs_{index}"), episode_id=episode_id) for index, raw in enumerate(payload.get("observations") or []) if isinstance(raw, dict)]
-        candidates = _candidates_from_payload(payload.get("candidates"))
+        observations = [normalize_observation(raw, fallback_id=str(raw.get("observation_id") or f"obs_{index}"), episode_id=episode_id) for index, raw in enumerate(observation_output.get("observations") or []) if isinstance(raw, dict)]
+        candidates = _candidates_from_payload(candidate_output.get("candidates"))
         if settings.MEMORY_STORAGE_ENABLED:
-            store.persist_observations(session_id=session_id, observations=observations, extractor_mode=str((payload.get("observation_debug") or {}).get("mode") or settings.MEMORY_FORMATION_EXTRACTOR), extractor_model=None, status="formed" if candidates else "extracted")
+            store.persist_observations(session_id=session_id, observations=observations, extractor_mode="staged_observation", extractor_model=None, status="formed" if candidates else "extracted")
             for candidate in candidates:
-                store.persist_candidate(session_id=session_id, episode_id=episode_id, candidate=candidate, extractor_mode=str((payload.get("formation_debug") or {}).get("mode") or settings.MEMORY_FORMATION_EXTRACTOR), extractor_model=None, status="planned" if plans else "extracted")
+                store.persist_candidate(session_id=session_id, episode_id=episode_id, candidate=candidate, extractor_mode="staged_candidate_formation", extractor_model=None, status="planned" if plans else "extracted")
             for plan in plans:
                 store.persist_write_plan(session_id=session_id, plan=plan)
         apply_result = None
@@ -690,6 +725,17 @@ def _candidates_from_payload(value: Any) -> List[MemoryCandidateLite]:
         if isinstance(raw, dict):
             candidates.append(normalize_candidate(raw, fallback_id=str(raw.get("candidate_id") or f"cand_{index}")))
     return candidates
+
+
+def _stage_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "session_id": payload.get("session_id"),
+        "episode_payload": payload.get("episode_payload") or {},
+        "workspace_dir": payload.get("workspace_dir"),
+        "pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION,
+        "staged": True,
+        "input_source": "pipeline_artifact",
+    }
 
 
 def _stage_index(stage_name: str) -> int:

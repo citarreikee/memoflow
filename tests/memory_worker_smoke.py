@@ -181,6 +181,12 @@ async def test_worker_processes_staged_formation_chain() -> None:
         assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_CANDIDATE_JOB_TYPE)) == 1
         assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_WRITE_JOB_TYPE)) == 1
         assert len(queue.list_jobs(status=SUCCEEDED, job_type=FORMATION_APPLY_JOB_TYPE)) == 1
+        for job_type in [FORMATION_CANDIDATE_JOB_TYPE, FORMATION_WRITE_JOB_TYPE, FORMATION_APPLY_JOB_TYPE]:
+            job = queue.list_jobs(status=SUCCEEDED, job_type=job_type)[0]
+            assert "observations" not in job.payload
+            assert "candidates" not in job.payload
+            assert "plans" not in job.payload
+            assert job.payload.get("input_source") == "pipeline_artifact"
 
 
 async def test_worker_requeues_stale_running_job_before_claim() -> None:

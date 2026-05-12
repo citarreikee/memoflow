@@ -149,6 +149,42 @@ class MemoryJobQueue:
             raise RuntimeError(f"memory_job_enqueue_failed:{job_id}")
         return job
 
+    def enqueue_once(
+        self,
+        *,
+        job_type: str,
+        payload: Dict[str, Any],
+        job_id: str,
+        session_id: Optional[str] = None,
+        episode_id: Optional[str] = None,
+        candidate_id: Optional[str] = None,
+        plan_id: Optional[str] = None,
+        priority: int = 100,
+        max_attempts: int = 3,
+        run_after: Optional[str] = None,
+    ) -> MemoryJob:
+        existing = self.get(job_id)
+        if existing is not None:
+            return existing
+        try:
+            return self.enqueue(
+                job_type=job_type,
+                payload=payload,
+                session_id=session_id,
+                episode_id=episode_id,
+                candidate_id=candidate_id,
+                plan_id=plan_id,
+                priority=priority,
+                max_attempts=max_attempts,
+                run_after=run_after,
+                job_id=job_id,
+            )
+        except sqlite3.IntegrityError:
+            existing = self.get(job_id)
+            if existing is None:
+                raise
+            return existing
+
     def claim_next(self, *, worker_id: str, job_types: Optional[List[str]] = None) -> Optional[MemoryJob]:
         now = utc_now()
         with self._connect() as conn:

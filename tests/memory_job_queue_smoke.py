@@ -71,6 +71,17 @@ def test_job_queue_lifecycle() -> None:
         assert dead.error == "boom"
 
 
+def test_enqueue_once_returns_existing_job() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        queue = MemoryJobQueue(tmp)
+        first = queue.enqueue_once(job_type="memory_observation", job_id="mjob_once", payload={"version": 1})
+        second = queue.enqueue_once(job_type="memory_observation", job_id="mjob_once", payload={"version": 2})
+
+        assert first.job_id == second.job_id
+        assert second.payload == {"version": 1}
+        assert len(queue.list_jobs(job_type="memory_observation")) == 1
+
+
 def test_stale_running_jobs_are_requeued_or_deaded() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         queue = MemoryJobQueue(tmp)
@@ -219,6 +230,7 @@ async def test_runtime_post_turn_compaction_enqueues_without_saving_checkpoint()
 
 def main() -> None:
     test_job_queue_lifecycle()
+    test_enqueue_once_returns_existing_job()
     test_stale_running_jobs_are_requeued_or_deaded()
     asyncio.run(test_runtime_background_formation_enqueues_job())
     asyncio.run(test_queued_formation_job_can_be_consumed())

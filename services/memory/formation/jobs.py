@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -165,11 +166,13 @@ class MemoryFormationJobRunner:
         episode_payload: Dict[str, Any],
         workspace_dir: Optional[str] = None,
     ) -> MemoryJob:
-        return self.queue.enqueue(
+        episode_id = str(episode_payload.get("episode_id") or "")
+        return self.queue.enqueue_once(
             job_type=FORMATION_OBSERVATION_JOB_TYPE,
             session_id=session_id,
-            episode_id=str(episode_payload.get("episode_id") or "") or None,
+            episode_id=episode_id or None,
             priority=40,
+            job_id=_stage_job_id(FORMATION_OBSERVATION_JOB_TYPE, session_id=session_id, episode_id=episode_id),
             payload={
                 "session_id": session_id,
                 "episode_payload": episode_payload,
@@ -191,11 +194,12 @@ class MemoryFormationJobRunner:
         if not self.load_stage_output(session_id=session_id, episode_id=episode_id, stage_name=completed_stage_name):
             raise ValueError(f"missing_stage_artifact:{completed_stage_name}")
         next_job_type = _next_job_type_after_stage(completed_stage_name, storage_enabled=settings.MEMORY_STORAGE_ENABLED)
-        return self.queue.enqueue(
+        return self.queue.enqueue_once(
             job_type=next_job_type,
             session_id=session_id,
             episode_id=episode_id or None,
             priority=42,
+            job_id=_stage_job_id(next_job_type, session_id=session_id, episode_id=episode_id, rerun_from=completed_stage_name),
             payload={
                 "session_id": session_id,
                 "episode_payload": episode_payload,
@@ -291,11 +295,12 @@ class MemoryFormationJobRunner:
             episode_id=episode_id,
             stage=stage,
         )
-        next_job = self.queue.enqueue(
+        next_job = self.queue.enqueue_once(
             job_type=FORMATION_CANDIDATE_JOB_TYPE,
             session_id=session_id,
             episode_id=episode_id or None,
             priority=45,
+            job_id=_stage_job_id(FORMATION_CANDIDATE_JOB_TYPE, session_id=session_id, episode_id=episode_id, rerun_from=payload.get("rerun_from_stage") if payload.get("rerun") else None),
             payload=_stage_payload(payload),
         )
         result = {
@@ -339,11 +344,12 @@ class MemoryFormationJobRunner:
         )
         artifact_debug = self._persist_single_stage_artifact(session_id=session_id, episode_id=episode_id, stage=stage)
         next_job_type = FORMATION_INTEGRATION_JOB_TYPE if settings.MEMORY_STORAGE_ENABLED else FORMATION_WRITE_JOB_TYPE
-        next_job = self.queue.enqueue(
+        next_job = self.queue.enqueue_once(
             job_type=next_job_type,
             session_id=session_id,
             episode_id=episode_id or None,
             priority=50,
+            job_id=_stage_job_id(next_job_type, session_id=session_id, episode_id=episode_id, rerun_from=payload.get("rerun_from_stage") if payload.get("rerun") else None),
             payload=_stage_payload(payload),
         )
         result = {
@@ -380,11 +386,12 @@ class MemoryFormationJobRunner:
             mode="rule_or_llm_integration",
         )
         artifact_debug = self._persist_single_stage_artifact(session_id=session_id, episode_id=episode_id, stage=stage)
-        next_job = self.queue.enqueue(
+        next_job = self.queue.enqueue_once(
             job_type=FORMATION_WRITE_JOB_TYPE,
             session_id=session_id,
             episode_id=episode_id or None,
             priority=55,
+            job_id=_stage_job_id(FORMATION_WRITE_JOB_TYPE, session_id=session_id, episode_id=episode_id, rerun_from=payload.get("rerun_from_stage") if payload.get("rerun") else None),
             payload=_stage_payload(payload),
         )
         result = {"pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION, "stage": stage.to_dict(), "memory_integration": integration_debug, "pipeline_artifacts": artifact_debug, "next_job_id": next_job.job_id, "next_job_type": next_job.job_type}
@@ -419,11 +426,12 @@ class MemoryFormationJobRunner:
             mode="integration_aware" if integration_plans else "preliminary",
         )
         artifact_debug = self._persist_single_stage_artifact(session_id=session_id, episode_id=episode_id, stage=stage)
-        next_job = self.queue.enqueue(
+        next_job = self.queue.enqueue_once(
             job_type=FORMATION_APPLY_JOB_TYPE,
             session_id=session_id,
             episode_id=episode_id or None,
             priority=60,
+            job_id=_stage_job_id(FORMATION_APPLY_JOB_TYPE, session_id=session_id, episode_id=episode_id, rerun_from=payload.get("rerun_from_stage") if payload.get("rerun") else None),
             payload=_stage_payload(payload),
         )
         result = {"pipeline_contract_version": FORMATION_PIPELINE_CONTRACT_VERSION, "stage": stage.to_dict(), "dry_run_writes": write_result.to_dict() if write_result else {}, "pipeline_artifacts": artifact_debug, "next_job_id": next_job.job_id, "next_job_type": next_job.job_type}
@@ -769,6 +777,24 @@ def _stage_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         staged_payload["rerun"] = True
         staged_payload["rerun_from_stage"] = payload.get("rerun_from_stage")
     return staged_payload
+
+
+def _stage_job_id(
+    job_type: str,
+    *,
+    session_id: str,
+    episode_id: str,
+    rerun_from: Optional[str] = None,
+) -> str:
+    raw_key = "|".join([
+        FORMATION_PIPELINE_CONTRACT_VERSION,
+        job_type,
+        session_id or "",
+        episode_id or "",
+        rerun_from or "mainline",
+    ])
+    digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()[:24]
+    return f"mjob_{digest}"
 
 
 def _next_job_type_after_stage(stage_name: str, *, storage_enabled: bool) -> str:

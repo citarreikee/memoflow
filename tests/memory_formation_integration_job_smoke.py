@@ -231,10 +231,22 @@ async def test_staged_formation_uses_distinct_job_types() -> None:
             },
             completed_stage_name="candidate_formation",
         )
+        duplicate_rerun_job = runner.schedule_rerun_from_stage(
+            session_id="session-staged-integration",
+            workspace_dir=tmp,
+            episode_payload={
+                "episode_id": "ep_staged_integration",
+                "session_id": "session-staged-integration",
+                "turn_index": 1,
+                "messages": [],
+            },
+            completed_stage_name="candidate_formation",
+        )
         rerun_results = await worker.run_until_idle(max_jobs=10)
         rerun_types = [result.job_type for result in rerun_results if result.status == "succeeded"]
 
         assert rerun_job.job_type == FORMATION_INTEGRATION_JOB_TYPE
+        assert duplicate_rerun_job.job_id == rerun_job.job_id
         assert rerun_job.payload.get("rerun") is True
         assert rerun_job.payload.get("rerun_from_stage") == "candidate_formation"
         assert rerun_types == [FORMATION_INTEGRATION_JOB_TYPE, FORMATION_WRITE_JOB_TYPE, FORMATION_APPLY_JOB_TYPE]

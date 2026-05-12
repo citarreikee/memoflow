@@ -165,12 +165,23 @@ async def test_worker_processes_staged_formation_chain() -> None:
             },
             workspace_dir=tmp,
         )
+        duplicate_first_job = runner.schedule_staged(
+            session_id="session-staged-worker",
+            episode_payload={
+                "episode_id": "ep_worker_staged",
+                "session_id": "session-staged-worker",
+                "turn_index": 1,
+                "messages": [],
+            },
+            workspace_dir=tmp,
+        )
         worker = MemoryWorker(queue=queue, formation_runner=runner, worker_id="staged-worker", retry_delay_seconds=0)
 
         results = await worker.run_until_idle(max_jobs=10)
         succeeded_types = [result.job_type for result in results if result.status == "succeeded"]
 
         assert first_job.job_type == FORMATION_OBSERVATION_JOB_TYPE
+        assert duplicate_first_job.job_id == first_job.job_id
         assert succeeded_types == [
             FORMATION_OBSERVATION_JOB_TYPE,
             FORMATION_CANDIDATE_JOB_TYPE,

@@ -77,6 +77,7 @@ def build_write_plan(
         related_memory_ids=list(integration_plan.related_memory_ids) if integration_plan else [],
         graph_relations=list(integration_plan.graph_relations) if integration_plan else [],
         memory_layers=list(integration_plan.memory_layers) if integration_plan else [],
+        target_selection=dict(integration_plan.target_selection) if integration_plan else {},
         needs_review_reasons=_dedupe(needs_review_reasons),
     )
 

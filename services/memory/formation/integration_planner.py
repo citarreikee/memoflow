@@ -54,6 +54,7 @@ def plan_memory_integration(
             rationale="Candidate may conflict with an existing memory and needs review before update/supersession.",
             target_memory_id=target.memory_id,
             related_memory_ids=[target.memory_id],
+            target_selection=_target_selection(target, best_score, reason="conflict_best_overlap"),
             needs_review_reasons=["possible_conflict"],
         )
 
@@ -66,6 +67,7 @@ def plan_memory_integration(
                 rationale="Candidate explicitly updates an existing memory in the same type/scope bucket.",
                 target_memory_id=best_memory.memory_id,
                 related_memory_ids=[best_memory.memory_id],
+                target_selection=_target_selection(best_memory, best_score, reason="update_best_overlap"),
                 suggested_text=candidate.text,
                 memory_layers=[candidate.memory_layer],
                 write_strategy="update_existing",
@@ -89,6 +91,7 @@ def plan_memory_integration(
                 target_memory_id=target.memory_id,
                 related_memory_ids=[target.memory_id],
                 graph_relations=[{"relation_type": "supersedes", "target_memory_id": target.memory_id}],
+                target_selection=_target_selection(target, best_score, reason="supersession_best_overlap"),
                 suggested_text=candidate.text,
                 memory_layers=[candidate.memory_layer],
                 write_strategy="supersede_existing",
@@ -108,6 +111,7 @@ def plan_memory_integration(
             confidence=round(best_score, 3),
             rationale="Existing memory already covers this candidate.",
             target_memory_id=best_memory.memory_id,
+            target_selection=_target_selection(best_memory, best_score, reason="duplicate_high_overlap"),
             blocked_reasons=["duplicate_existing_memory"],
         )
 
@@ -118,6 +122,7 @@ def plan_memory_integration(
             confidence=round(best_score, 3),
                 rationale="Candidate overlaps an existing memory and should be merged or used as extra evidence.",
                 target_memory_id=best_memory.memory_id,
+                target_selection=_target_selection(best_memory, best_score, reason="merge_medium_overlap"),
                 suggested_text=_merge_text(best_memory.text, candidate.text),
                 memory_layers=[candidate.memory_layer],
                 write_strategy="merge_with_existing",
@@ -134,6 +139,11 @@ def plan_memory_integration(
                 target_memory_id=relation_target.memory_id,
                 related_memory_ids=[relation_target.memory_id],
                 graph_relations=[{"relation_type": relation_type, "target_memory_id": relation_target.memory_id}],
+                target_selection=_target_selection(
+                    relation_target,
+                    _jaccard(_tokens(candidate.text), _tokens(relation_target.text)),
+                    reason="relation_target_overlap",
+                ),
                 memory_layers=["relation"],
                 write_strategy="link_as_relation",
             )
@@ -238,6 +248,17 @@ def _merge_text(existing: str, candidate: str) -> str:
     if _normalize(existing) in _normalize(candidate):
         return candidate
     return f"{existing} / Additional evidence: {candidate}"
+
+
+def _target_selection(memory: ExistingMemorySnapshot, score: float, *, reason: str) -> dict[str, object]:
+    return {
+        "memory_id": memory.memory_id,
+        "score": round(score, 3),
+        "reason": reason,
+        "type": memory.type,
+        "scope": memory.scope,
+        "version": memory.version,
+    }
 
 
 def _tokens(text: str) -> set[str]:

@@ -840,6 +840,7 @@ def _integration_plans_from_payload(value: Any) -> List[MemoryIntegrationPlan]:
                 suggested_text=raw.get("suggested_text") if isinstance(raw.get("suggested_text"), str) else None,
                 memory_layers=[str(item) for item in raw.get("memory_layers") or []],
                 write_strategy=raw.get("write_strategy") if isinstance(raw.get("write_strategy"), str) else None,
+                target_selection=raw.get("target_selection") if isinstance(raw.get("target_selection"), dict) else {},
                 related_existing_indices=[int(item) for item in raw.get("related_existing_indices") or []],
                 blocked_reasons=[str(item) for item in raw.get("blocked_reasons") or []],
                 needs_review_reasons=[str(item) for item in raw.get("needs_review_reasons") or []],
@@ -875,6 +876,7 @@ def _write_plans_from_payload(value: Any) -> List[MemoryWritePlan]:
                 related_memory_ids=[str(item) for item in raw.get("related_memory_ids") or []],
                 graph_relations=raw.get("graph_relations") if isinstance(raw.get("graph_relations"), list) else [],
                 memory_layers=[str(item) for item in raw.get("memory_layers") or []],
+                target_selection=raw.get("target_selection") if isinstance(raw.get("target_selection"), dict) else {},
                 needs_review_reasons=[str(item) for item in raw.get("needs_review_reasons") or []],
             )
         )

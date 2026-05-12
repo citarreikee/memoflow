@@ -167,6 +167,7 @@ class MemoryWritePlan:
     related_memory_ids: List[str] = field(default_factory=list)
     graph_relations: List[Dict[str, str]] = field(default_factory=list)
     memory_layers: List[str] = field(default_factory=list)
+    target_selection: Dict[str, Any] = field(default_factory=dict)
     needs_review_reasons: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:

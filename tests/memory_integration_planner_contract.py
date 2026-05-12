@@ -86,6 +86,9 @@ def test_merge_when_candidate_overlaps_existing_memory() -> None:
 
     assert plan.action == "MERGE"
     assert plan.target_memory_id == "mem_1"
+    assert plan.target_selection["memory_id"] == "mem_1"
+    assert plan.target_selection["reason"] == "merge_medium_overlap"
+    assert plan.target_selection["score"] >= 0.5
     assert "Additional evidence" in (plan.suggested_text or "")
 
 
@@ -105,6 +108,8 @@ def test_update_when_candidate_requests_update_existing_memory() -> None:
 
     assert plan.action == "UPDATE"
     assert plan.target_memory_id == "mem_state"
+    assert plan.target_selection["memory_id"] == "mem_state"
+    assert plan.target_selection["reason"] == "update_best_overlap"
     assert plan.suggested_text == "Task state: formation scenario eval is implemented and connected to the harness."
 
 
@@ -118,6 +123,8 @@ def test_supersede_when_candidate_explicitly_replaces_existing_memory() -> None:
     assert plan.action == "SUPERSEDE"
     assert plan.target_memory_id == "mem_sidecar"
     assert plan.related_memory_ids == ["mem_sidecar"]
+    assert plan.target_selection["memory_id"] == "mem_sidecar"
+    assert plan.target_selection["reason"] == "supersession_best_overlap"
     assert plan.graph_relations[0]["relation_type"] == "supersedes"
     assert "supersedes" in plan.rationale.lower()
 
@@ -134,6 +141,8 @@ def test_link_when_relation_targets_existing_memory() -> None:
 
     assert plan.action == "LINK"
     assert plan.target_memory_id == "mem_runtime"
+    assert plan.target_selection["memory_id"] == "mem_runtime"
+    assert plan.target_selection["reason"] == "relation_target_overlap"
     assert plan.graph_relations[0]["relation_type"] == "depends_on"
 
 
@@ -180,6 +189,8 @@ def test_possible_conflict_uses_first_class_conflict_action() -> None:
 
     assert plan.action == "CONFLICT"
     assert plan.target_memory_id == "mem_pref"
+    assert plan.target_selection["memory_id"] == "mem_pref"
+    assert plan.target_selection["reason"] == "conflict_best_overlap"
     assert "possible_conflict" in plan.needs_review_reasons
 
 
@@ -203,6 +214,7 @@ def test_review_integration_actions_remain_first_class_write_actions() -> None:
     assert write_plan.action == "CONFLICT"
     assert write_plan.status == "needs_review"
     assert write_plan.target_memory_id == "mem_pref"
+    assert write_plan.target_selection["memory_id"] == "mem_pref"
     assert write_plan.needs_review_reasons == ["possible_conflict"]
 
 
@@ -228,9 +240,12 @@ def test_llm_conflict_decision_remains_first_class_write_action() -> None:
 
     assert integration.action == "CONFLICT"
     assert integration.target_memory_id == "mem_conflict"
+    assert integration.target_selection["memory_id"] == "mem_conflict"
+    assert integration.target_selection["reason"] == "llm_mark_conflict"
     assert "llm_marked_conflict" in integration.needs_review_reasons
     assert write_plan.action == "CONFLICT"
     assert write_plan.status == "needs_review"
+    assert write_plan.target_selection["memory_id"] == "mem_conflict"
 
 
 def main() -> None:

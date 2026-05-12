@@ -187,10 +187,23 @@ def decision_to_integration_plan(
         suggested_text=suggested_text if action not in {"NOOP"} else None,
         memory_layers=decision.memory_layers,
         write_strategy=decision.write_strategy,
+        target_selection=_target_selection(existing_memories[related_indices[0]], related_indices[0], reason=f"llm_{decision.write_strategy}") if related_indices else {},
         related_existing_indices=related_indices,
         blocked_reasons=blocked_reasons,
         needs_review_reasons=review_reasons,
     )
+
+
+def _target_selection(memory: ExistingMemorySnapshot, index: int, *, reason: str) -> Dict[str, object]:
+    return {
+        "memory_id": memory.memory_id,
+        "score": None,
+        "reason": reason,
+        "type": memory.type,
+        "scope": memory.scope,
+        "version": memory.version,
+        "related_existing_index": index,
+    }
 
 
 MAX_LLM_RELATED_MEMORIES = 8

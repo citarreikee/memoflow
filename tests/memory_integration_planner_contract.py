@@ -10,6 +10,8 @@ if str(ROOT_DIR) not in sys.path:
 
 from services.memory.formation.integration_planner import plan_memory_integration
 from services.memory.formation.integration_schemas import ExistingMemorySnapshot
+from services.memory.formation.integration_llm import MinimalIntegrationDecision, decision_to_integration_plan
+from services.memory.formation.mutation_planner import build_write_plan
 from services.memory.formation.schemas import MemoryCandidateLite
 
 
@@ -163,7 +165,7 @@ def test_low_confidence_candidate_needs_review() -> None:
     assert "low_confidence_or_unknown_stability" in plan.needs_review_reasons
 
 
-def test_possible_conflict_needs_review() -> None:
+def test_possible_conflict_uses_first_class_conflict_action() -> None:
     existing = memory("mem_pref", "The user prefers concise status summaries.", memory_type="preference", scope="user")
     plan = plan_memory_integration(
         candidate(
@@ -176,9 +178,59 @@ def test_possible_conflict_needs_review() -> None:
         existing_memories=[existing],
     )
 
-    assert plan.action == "NEEDS_REVIEW"
+    assert plan.action == "CONFLICT"
     assert plan.target_memory_id == "mem_pref"
     assert "possible_conflict" in plan.needs_review_reasons
+
+
+def test_review_integration_actions_remain_first_class_write_actions() -> None:
+    existing = memory("mem_pref", "The user prefers concise status summaries.", memory_type="preference", scope="user")
+    candidate_for_review = candidate(
+        "The user no longer wants concise status summaries.",
+        memory_type="preference",
+        scope="user",
+        importance=0.82,
+        stability="stable",
+    )
+    integration = plan_memory_integration(candidate_for_review, existing_memories=[existing])
+    write_plan = build_write_plan(
+        candidate_for_review,
+        evidence_episode_ids=["ep_contract"],
+        integration_plan=integration,
+    )
+
+    assert integration.action == "CONFLICT"
+    assert write_plan.action == "CONFLICT"
+    assert write_plan.status == "needs_review"
+    assert write_plan.target_memory_id == "mem_pref"
+    assert write_plan.needs_review_reasons == ["possible_conflict"]
+
+
+def test_llm_conflict_decision_remains_first_class_write_action() -> None:
+    existing = memory("mem_conflict", "Decision: keep memory worker disabled by default.")
+    candidate_for_review = candidate("Decision: keep memory worker enabled by default.")
+    integration = decision_to_integration_plan(
+        candidate_for_review,
+        existing_memories=[existing],
+        decision=MinimalIntegrationDecision(
+            memory_content="Decision: keep memory worker enabled by default.",
+            memory_layers=["semantic"],
+            write_strategy="mark_conflict",
+            related_existing_indices=[0],
+            reason="LLM detected contradictory default.",
+        ),
+    )
+    write_plan = build_write_plan(
+        candidate_for_review,
+        evidence_episode_ids=["ep_contract"],
+        integration_plan=integration,
+    )
+
+    assert integration.action == "CONFLICT"
+    assert integration.target_memory_id == "mem_conflict"
+    assert "llm_marked_conflict" in integration.needs_review_reasons
+    assert write_plan.action == "CONFLICT"
+    assert write_plan.status == "needs_review"
 
 
 def main() -> None:
@@ -190,7 +242,9 @@ def main() -> None:
     test_link_when_relation_targets_existing_memory()
     test_relation_without_target_needs_review()
     test_low_confidence_candidate_needs_review()
-    test_possible_conflict_needs_review()
+    test_possible_conflict_uses_first_class_conflict_action()
+    test_review_integration_actions_remain_first_class_write_actions()
+    test_llm_conflict_decision_remains_first_class_write_action()
     print("memory integration planner contract ok")
 
 

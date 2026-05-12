@@ -106,7 +106,7 @@ def _write_action_from_integration(integration: MemoryIntegrationPlan, *, fallba
     if integration.action in AUTO_APPLY_INTEGRATION_ACTIONS:
         return integration.action
     if integration.action in {"NOOP", "NEEDS_REVIEW", "CONFLICT"}:
-        return "NOOP" if integration.action == "NOOP" else "ADD"
+        return integration.action
     return fallback
 
 

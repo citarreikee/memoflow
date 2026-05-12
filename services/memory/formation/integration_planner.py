@@ -45,6 +45,18 @@ def plan_memory_integration(
     same_bucket = [memory for memory in existing if memory.type == candidate.type and memory.scope == candidate.scope]
     best_memory, best_score = _best_overlap(candidate.text, same_bucket)
 
+    if _looks_like_conflict(candidate.text, same_bucket):
+        target = best_memory or same_bucket[0]
+        return MemoryIntegrationPlan(
+            candidate_id=candidate.candidate_id or "",
+            action="CONFLICT",
+            confidence=0.5,
+            rationale="Candidate may conflict with an existing memory and needs review before update/supersession.",
+            target_memory_id=target.memory_id,
+            related_memory_ids=[target.memory_id],
+            needs_review_reasons=["possible_conflict"],
+        )
+
     if candidate.action == "UPDATE":
         if best_memory:
             return MemoryIntegrationPlan(
@@ -87,18 +99,6 @@ def plan_memory_integration(
             confidence=round(candidate.importance, 3),
             rationale="Candidate expresses supersession but no matching active memory was found.",
             needs_review_reasons=["supersession_target_missing"],
-        )
-
-    if _looks_like_conflict(candidate.text, same_bucket):
-        target = same_bucket[0] if same_bucket else None
-        return MemoryIntegrationPlan(
-            candidate_id=candidate.candidate_id or "",
-            action="NEEDS_REVIEW",
-            confidence=0.5,
-            rationale="Candidate may conflict with an existing memory and needs review before update/supersession.",
-            target_memory_id=target.memory_id if target else None,
-            related_memory_ids=[target.memory_id] if target else [],
-            needs_review_reasons=["possible_conflict"],
         )
 
     if best_memory and _covers(best_memory.text, candidate.text, best_score):

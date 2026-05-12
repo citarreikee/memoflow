@@ -78,6 +78,7 @@ def build_write_plan(
         graph_relations=list(integration_plan.graph_relations) if integration_plan else [],
         memory_layers=list(integration_plan.memory_layers) if integration_plan else [],
         target_selection=dict(integration_plan.target_selection) if integration_plan else {},
+        storage_route=shape.to_dict(),
         needs_review_reasons=_dedupe(needs_review_reasons),
     )
 

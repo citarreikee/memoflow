@@ -877,6 +877,7 @@ def _write_plans_from_payload(value: Any) -> List[MemoryWritePlan]:
                 graph_relations=raw.get("graph_relations") if isinstance(raw.get("graph_relations"), list) else [],
                 memory_layers=[str(item) for item in raw.get("memory_layers") or []],
                 target_selection=raw.get("target_selection") if isinstance(raw.get("target_selection"), dict) else {},
+                storage_route=raw.get("storage_route") if isinstance(raw.get("storage_route"), dict) else {},
                 needs_review_reasons=[str(item) for item in raw.get("needs_review_reasons") or []],
             )
         )

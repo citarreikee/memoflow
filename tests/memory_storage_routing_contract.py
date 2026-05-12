@@ -42,7 +42,9 @@ def test_preference_routes_to_semantic_source_with_vector_projection() -> None:
 
     assert route.canonical_store == "semantic_kv"
     assert route.source_of_truth_store == "semantic_kv"
+    assert route.canonical_write == {"store": "semantic_kv", "role": "source_of_truth"}
     assert "vector_projection" in route.projections
+    assert {"store": "vector_projection", "role": "projection", "source_of_truth": False} in route.projection_writes
     assert "vector_projection" not in route.unsupported_routes
     assert not route.review_required
 
@@ -59,7 +61,9 @@ def test_project_rule_routes_to_file_source() -> None:
 
     assert route.canonical_store == "file_memory"
     assert route.source_of_truth_store == "file_memory"
+    assert route.canonical_write == {"store": "file_memory", "role": "source_of_truth"}
     assert "episode_log" in route.projections
+    assert {"store": "episode_log", "role": "evidence", "source_of_truth": False} in route.projection_writes
 
 
 def test_state_kv_is_explicitly_downgraded_until_store_exists() -> None:
@@ -106,6 +110,7 @@ def test_review_queue_route_requires_review_without_canonical_write() -> None:
 
     assert route.canonical_store is None
     assert route.source_of_truth_store is None
+    assert route.canonical_write is None
     assert route.review_required
     assert "review_queue" in route.unsupported_routes
     assert "episode_log" in route.projections
@@ -141,6 +146,8 @@ def test_write_plan_carries_storage_route_trace() -> None:
 
     assert write_plan.canonical_store == "semantic_kv"
     assert write_plan.storage_route["source_of_truth_store"] == "semantic_kv"
+    assert write_plan.storage_route["canonical_write"] == {"store": "semantic_kv", "role": "source_of_truth"}
+    assert {"store": "episode_log", "role": "evidence", "source_of_truth": False} in write_plan.storage_route["projection_writes"]
     assert "state_kv" in write_plan.storage_route["unsupported_routes"]
     assert "state_kv_downgraded_to_semantic_kv" in write_plan.storage_route["blocked_reasons"]
 

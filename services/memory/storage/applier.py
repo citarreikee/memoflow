@@ -217,10 +217,11 @@ class MemoryWriteApplier:
         return memory_id
 
     def _apply_projections(self, *, memory_id: Optional[str], plan: MemoryWritePlan, result: MemoryApplyResult) -> None:
-        if plan.canonical_store == "relation_graph" or "relation_graph" in plan.projections:
+        projection_stores = _projection_stores(plan)
+        if plan.canonical_store == "relation_graph" or "relation_graph" in projection_stores:
             self._apply_graph_relations(memory_id=memory_id, plan=plan, result=result, relations=_relations_for_plan(plan))
 
-        if plan.canonical_store == "vector_projection" or "vector_projection" in plan.projections:
+        if plan.canonical_store == "vector_projection" or "vector_projection" in projection_stores:
             self._apply_vector_projection(memory_id=memory_id, plan=plan, result=result)
 
     def _apply_graph_relations(
@@ -385,6 +386,22 @@ def _relations_for_plan(plan: MemoryWritePlan) -> List[Dict[str, Optional[str]]]
     if has_explicit_graph_relation(_PlanCandidateAdapter(plan)):
         return [{"relation_type": _infer_relation_type(plan.text), "target_memory_id": plan.target_memory_id}]
     return []
+
+
+def _projection_stores(plan: MemoryWritePlan) -> List[str]:
+    writes = plan.storage_route.get("projection_writes") if isinstance(plan.storage_route, dict) else None
+    stores: List[str] = []
+    if isinstance(writes, list):
+        for write in writes:
+            if not isinstance(write, dict):
+                continue
+            store = str(write.get("store") or "").strip()
+            if store and store not in stores:
+                stores.append(store)
+    for store in plan.projections:
+        if store not in stores:
+            stores.append(store)
+    return stores
 
 
 def _infer_relation_type(text: str) -> str:

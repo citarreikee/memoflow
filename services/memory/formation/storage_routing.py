@@ -50,6 +50,8 @@ class StorageRoute:
     projections: List[str]
     blocked_reasons: List[str]
     source_of_truth_store: Optional[str] = None
+    canonical_write: Optional[Dict[str, object]] = None
+    projection_writes: List[Dict[str, object]] = field(default_factory=list)
     unsupported_routes: List[str] = field(default_factory=list)
     review_required: bool = False
     routing_reason: str = ""
@@ -60,6 +62,8 @@ class StorageRoute:
             "projections": self.projections,
             "blocked_reasons": self.blocked_reasons,
             "source_of_truth_store": self.source_of_truth_store,
+            "canonical_write": self.canonical_write,
+            "projection_writes": self.projection_writes,
             "unsupported_routes": self.unsupported_routes,
             "review_required": self.review_required,
             "routing_reason": self.routing_reason,
@@ -146,12 +150,16 @@ def plan_storage_route(
         if "file_memory_scope_downgraded" not in blocked_reasons:
             blocked_reasons.append("file_memory_scope_downgraded")
 
+    projections = _dedupe(projections)
+    blocked_reasons = _dedupe(blocked_reasons)
     return StorageRoute(
         canonical_store=canonical_store,
-        projections=_dedupe(projections),
-        blocked_reasons=_dedupe(blocked_reasons),
+        projections=projections,
+        blocked_reasons=blocked_reasons,
         source_of_truth_store=canonical_store,
-        unsupported_routes=_unsupported_routes(_dedupe(blocked_reasons)),
+        canonical_write=_canonical_write(canonical_store),
+        projection_writes=_projection_writes(projections, canonical_store=canonical_store),
+        unsupported_routes=_unsupported_routes(blocked_reasons),
         review_required=canonical_store is None and bool(projections),
         routing_reason=_routing_reason(candidate=candidate, write_strategy=write_strategy, memory_layers=memory_layers),
     )
@@ -265,6 +273,31 @@ def _unsupported_routes(blocked_reasons: List[str]) -> List[str]:
         if route and route not in routes:
             routes.append(route)
     return routes
+
+
+def _canonical_write(canonical_store: Optional[str]) -> Optional[Dict[str, object]]:
+    if not canonical_store:
+        return None
+    return {
+        "store": canonical_store,
+        "role": "source_of_truth",
+    }
+
+
+def _projection_writes(projections: List[str], *, canonical_store: Optional[str]) -> List[Dict[str, object]]:
+    writes: List[Dict[str, object]] = []
+    for store in projections:
+        role = "evidence" if store == EPISODE_LOG else "projection"
+        if store == canonical_store:
+            role = "canonical_mirror"
+        writes.append(
+            {
+                "store": store,
+                "role": role,
+                "source_of_truth": False,
+            }
+        )
+    return writes
 
 
 def _routing_reason(

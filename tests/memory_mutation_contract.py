@@ -214,6 +214,28 @@ def test_link_writes_relation_without_fake_semantic_record() -> None:
         assert edges[0]["target_memory_id"] == target["memory_id"]
 
 
+def test_apply_uses_storage_route_projection_writes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
+        applier = MemoryWriteApplier(store)
+        plan = make_plan(
+            plan_id="route_projection",
+            action="ADD",
+            text="Decision: route projection writes drive vector application.",
+            projections=[],
+        )
+        plan.storage_route = {
+            "canonical_write": {"store": "semantic_kv", "role": "source_of_truth"},
+            "projection_writes": [{"store": "vector_projection", "role": "projection", "source_of_truth": False}],
+        }
+
+        result = applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[plan])
+
+        assert result.canonical_writes == 1
+        assert result.vector_projections == 1
+        assert store.count_rows("memory_vector_projections") == 1
+
+
 def test_review_and_conflict_are_persisted_without_canonical_mutation() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
@@ -274,6 +296,7 @@ def main() -> None:
     test_supersede_writes_targeted_graph_edge()
     test_supersede_replay_does_not_duplicate_edges_or_records()
     test_link_writes_relation_without_fake_semantic_record()
+    test_apply_uses_storage_route_projection_writes()
     test_review_and_conflict_are_persisted_without_canonical_mutation()
     test_review_replay_is_idempotent()
     print("memory mutation contract ok")

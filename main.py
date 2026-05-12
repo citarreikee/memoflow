@@ -1,4 +1,6 @@
+import asyncio
 import inspect
+from contextlib import suppress
 from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
@@ -20,6 +22,11 @@ from services.chat_service import (
     stream_chat_with_session,
 )
 from services.model_catalog import ModelCatalogState, get_models_response
+from services.memory.compaction_jobs import MemoryCompactionJobRunner
+from services.memory.formation.jobs import MemoryFormationJobRunner
+from services.memory.jobs import MemoryJobQueue
+from services.memory.session_store import SessionStore
+from services.memory.worker import MemoryWorker
 from services.system_service import (
     get_api_info_payload,
     get_health_payload,
@@ -49,6 +56,58 @@ async def load_persisted_sessions() -> None:
     from services.memory.session_store import session_store
 
     session_store.load_sessions_into(session_manager)
+    start_memory_worker_loop()
+
+
+@app.on_event("shutdown")
+async def stop_memory_worker() -> None:
+    await stop_memory_worker_loop()
+
+
+def start_memory_worker_loop() -> None:
+    if not settings.MEMORY_WORKER_ENABLED:
+        app.state.memory_worker_enabled = False
+        return
+    existing_task = getattr(app.state, "memory_worker_task", None)
+    if existing_task and not existing_task.done():
+        return
+    app.state.memory_worker_enabled = True
+    app.state.memory_worker_task = asyncio.create_task(_memory_worker_loop(), name="memoflow-memory-worker")
+
+
+async def stop_memory_worker_loop() -> None:
+    task = getattr(app.state, "memory_worker_task", None)
+    if not task:
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+    app.state.memory_worker_task = None
+
+
+async def _memory_worker_loop() -> None:
+    queue = MemoryJobQueue.from_settings()
+    formation_runner = MemoryFormationJobRunner(log_dir=settings.MEMORY_WRITE_PLAN_LOG_DIR, queue=queue)
+    compaction_runner = MemoryCompactionJobRunner(store=SessionStore(settings.MEMORY_DATA_DIR), queue=queue)
+    worker = MemoryWorker(
+        queue=queue,
+        formation_runner=formation_runner,
+        compaction_runner=compaction_runner,
+        worker_id=settings.MEMORY_WORKER_ID,
+        retry_delay_seconds=0,
+    )
+    while True:
+        try:
+            results = await worker.run_until_idle(max_jobs=settings.MEMORY_WORKER_MAX_JOBS_PER_TICK)
+            claimed = any(result.claimed for result in results)
+            if not claimed:
+                await asyncio.sleep(settings.MEMORY_WORKER_POLL_INTERVAL_SECONDS)
+            else:
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await asyncio.sleep(settings.MEMORY_WORKER_POLL_INTERVAL_SECONDS)
 
 
 async def _maybe_await(value: Any) -> Any:

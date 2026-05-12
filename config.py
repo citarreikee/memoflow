@@ -81,6 +81,15 @@ class Settings:
             "yes",
             "on",
         }
+        self.MEMORY_WORKER_ENABLED: bool = os.getenv("MEMORY_WORKER_ENABLED", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.MEMORY_WORKER_ID: str = os.getenv("MEMORY_WORKER_ID", "memoflow-main-worker").strip() or "memoflow-main-worker"
+        self.MEMORY_WORKER_POLL_INTERVAL_SECONDS: float = float(os.getenv("MEMORY_WORKER_POLL_INTERVAL_SECONDS", "1"))
+        self.MEMORY_WORKER_MAX_JOBS_PER_TICK: int = int(os.getenv("MEMORY_WORKER_MAX_JOBS_PER_TICK", "20"))
         self.MEMORY_JOB_STALE_AFTER_SECONDS: int = int(os.getenv("MEMORY_JOB_STALE_AFTER_SECONDS", "1800"))
         self.MEMORY_STORAGE_ENABLED: bool = os.getenv("MEMORY_STORAGE_ENABLED", "false").strip().lower() in {
             "1",

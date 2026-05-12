@@ -531,6 +531,79 @@ class MemorySQLiteStore:
             row = conn.execute("SELECT * FROM memory_records WHERE memory_id = ?", (memory_id,)).fetchone()
             return _row_to_dict(row) if row else None
 
+    def get_record_by_source_plan(self, *, source_plan_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM memory_records
+                WHERE source_plan_id = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (source_plan_id,),
+            ).fetchone()
+            return _row_to_dict(row) if row else None
+
+    def has_evidence_link(self, *, memory_id: str, episode_id: str, plan_id: str, evidence_role: str = "source") -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM memory_evidence_links
+                WHERE memory_id = ? AND episode_id = ? AND plan_id = ? AND evidence_role = ?
+                LIMIT 1
+                """,
+                (memory_id, episode_id, plan_id, evidence_role),
+            ).fetchone()
+            return row is not None
+
+    def has_vector_projection(self, *, memory_id: Optional[str], episode_id: Optional[str], source_plan_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM memory_vector_projections
+                WHERE memory_id IS ? AND episode_id IS ? AND source_plan_id = ?
+                LIMIT 1
+                """,
+                (memory_id, episode_id, source_plan_id),
+            ).fetchone()
+            return row is not None
+
+    def has_graph_edge(
+        self,
+        *,
+        memory_id: Optional[str],
+        episode_id: Optional[str],
+        relation_type: str,
+        source_plan_id: str,
+        target_memory_id: Optional[str] = None,
+    ) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM memory_graph_edges
+                WHERE source_memory_id IS ?
+                  AND target_memory_id IS ?
+                  AND source_episode_id IS ?
+                  AND relation_type = ?
+                  AND source_plan_id = ?
+                  AND status = 'active'
+                LIMIT 1
+                """,
+                (memory_id, target_memory_id, episode_id, relation_type, source_plan_id),
+            ).fetchone()
+            return row is not None
+
+    def has_review_item(self, *, source_plan_id: str, status: str = "pending_review") -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM memory_review_items
+                WHERE source_plan_id = ? AND status = ?
+                LIMIT 1
+                """,
+                (source_plan_id, status),
+            ).fetchone()
+            return row is not None
+
     def search_active_records(
         self,
         *,

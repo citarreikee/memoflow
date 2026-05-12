@@ -85,6 +85,33 @@ def test_update_creates_successor_version_and_supersedes_target() -> None:
         assert old["status"] == "superseded"
 
 
+def test_update_replay_is_idempotent() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
+        applier = MemoryWriteApplier(store)
+        seed = make_plan(plan_id="seed_update_replay", action="ADD", text="Decision: keep mutation replay safe.")
+        applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[seed])
+        target = active_records(store)[0]
+        update = make_plan(
+            plan_id="update_replay",
+            action="UPDATE",
+            text="Decision: keep mutation replay safe with source plan idempotency.",
+            target_memory_id=str(target["memory_id"]),
+        )
+
+        first = applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[update])
+        second = applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[update])
+
+        assert first.canonical_writes == 1
+        assert first.evidence_links == 1
+        assert second.canonical_writes == 0
+        assert second.evidence_links == 0
+        assert second.vector_projections == 0
+        assert store.count_rows("memory_records") == 2
+        assert store.count_rows("memory_evidence_links") == 2
+        assert store.count_rows("memory_vector_projections") == 2
+
+
 def test_merge_requires_target_and_adds_successor_when_target_exists() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
@@ -132,6 +159,34 @@ def test_supersede_writes_targeted_graph_edge() -> None:
         assert result.canonical_writes == 1
         assert result.graph_edges >= 1
         assert any(edge["target_memory_id"] == target["memory_id"] for edge in edges)
+
+
+def test_supersede_replay_does_not_duplicate_edges_or_records() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
+        applier = MemoryWriteApplier(store)
+        seed = make_plan(plan_id="seed_super_replay", action="ADD", text="Decision: compact through staged worker.")
+        applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[seed])
+        target = active_records(store)[0]
+        supersede = make_plan(
+            plan_id="super_replay",
+            action="SUPERSEDE",
+            text="Decision: compact through staged worker with apply idempotency.",
+            target_memory_id=str(target["memory_id"]),
+            projections=["episode_log", "relation_graph", "vector_projection"],
+            graph_relations=[{"relation_type": "supersedes", "target_memory_id": str(target["memory_id"])}],
+        )
+
+        first = applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[supersede])
+        second = applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[supersede])
+
+        assert first.canonical_writes == 1
+        assert first.graph_edges >= 1
+        assert second.canonical_writes == 0
+        assert second.graph_edges == 0
+        assert second.evidence_links == 0
+        assert store.count_rows("memory_records") == 2
+        assert store.count_rows("memory_graph_edges") == 1
 
 
 def test_link_writes_relation_without_fake_semantic_record() -> None:
@@ -189,12 +244,38 @@ def test_review_and_conflict_are_persisted_without_canonical_mutation() -> None:
         assert store.count_rows("memory_review_items") == 2
 
 
+def test_review_replay_is_idempotent() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
+        applier = MemoryWriteApplier(store)
+        review = make_plan(
+            plan_id="review_replay",
+            action="CONFLICT",
+            text="Decision: possible conflict should wait for review.",
+            status="needs_review",
+            canonical_store=None,
+            projections=["episode_log", "relation_graph"],
+            needs_review_reasons=["possible_conflict"],
+        )
+
+        first = applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[review])
+        second = applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[review])
+
+        assert first.review_items == 1
+        assert second.review_items == 0
+        assert store.count_rows("memory_records") == 0
+        assert store.count_rows("memory_review_items") == 1
+
+
 def main() -> None:
     test_update_creates_successor_version_and_supersedes_target()
+    test_update_replay_is_idempotent()
     test_merge_requires_target_and_adds_successor_when_target_exists()
     test_supersede_writes_targeted_graph_edge()
+    test_supersede_replay_does_not_duplicate_edges_or_records()
     test_link_writes_relation_without_fake_semantic_record()
     test_review_and_conflict_are_persisted_without_canonical_mutation()
+    test_review_replay_is_idempotent()
     print("memory mutation contract ok")
 
 

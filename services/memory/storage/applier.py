@@ -86,7 +86,10 @@ class MemoryWriteApplier:
             result.blocked_count += 1
             result.blocked_reasons.append(f"unsupported_plan_action:{plan.action}")
             return
+        blocked_before = result.blocked_count
         handler(session_id=session_id, workspace_dir=workspace_dir, plan=plan, result=result)
+        if result.blocked_count > blocked_before:
+            return
         self.store.mark_plan_applied(plan_id=plan.plan_id)
         result.applied_plan_ids.append(plan.plan_id)
 
@@ -185,9 +188,10 @@ class MemoryWriteApplier:
 
     def _apply_review_item(self, *, session_id: str, plan: MemoryWritePlan, result: MemoryApplyResult) -> None:
         reason = ";".join(plan.needs_review_reasons or plan.blocked_reasons or ["needs_review"])
-        self.store.insert_review_item(session_id=session_id, plan=plan, reason=reason)
+        if not self.store.has_review_item(source_plan_id=plan.plan_id):
+            self.store.insert_review_item(session_id=session_id, plan=plan, reason=reason)
+            result.review_items += 1
         self.store.mark_plan_applied(plan_id=plan.plan_id)
-        result.review_items += 1
         result.applied_plan_ids.append(plan.plan_id)
 
     def _apply_canonical_or_file(
@@ -228,17 +232,33 @@ class MemoryWriteApplier:
         relations: List[Dict[str, Optional[str]]],
     ) -> None:
         for relation in relations:
+            relation_type = relation["relation_type"] or "derived_from"
+            target_memory_id = relation.get("target_memory_id")
+            if self.store.has_graph_edge(
+                memory_id=memory_id,
+                episode_id=plan.evidence_episode_ids[0],
+                relation_type=relation_type,
+                source_plan_id=plan.plan_id,
+                target_memory_id=target_memory_id,
+            ):
+                continue
             self.store.insert_graph_edge(
                 memory_id=memory_id,
                 episode_id=plan.evidence_episode_ids[0],
-                relation_type=relation["relation_type"] or "derived_from",
-                target_memory_id=relation.get("target_memory_id"),
+                relation_type=relation_type,
+                target_memory_id=target_memory_id,
                 plan=plan,
             )
             result.graph_edges += 1
             result.reindex_jobs += self._enqueue_job("refresh_graph", "graph_edge_created", memory_id=memory_id, plan=plan)
 
     def _apply_vector_projection(self, *, memory_id: Optional[str], plan: MemoryWritePlan, result: MemoryApplyResult) -> None:
+        if self.store.has_vector_projection(
+            memory_id=memory_id,
+            episode_id=plan.evidence_episode_ids[0],
+            source_plan_id=plan.plan_id,
+        ):
+            return
         projection_id = self.store.insert_vector_projection(
             memory_id=memory_id,
             episode_id=plan.evidence_episode_ids[0],
@@ -267,52 +287,63 @@ class MemoryWriteApplier:
     ) -> str:
         namespace = derive_namespace(scope=plan.scope, session_id=session_id, workspace_dir=workspace_dir)
         key = derive_memory_key(plan)
-        existing = self.store.find_active_record(scope=plan.scope, namespace=namespace, memory_type=plan.type, key=key)
-        status = "active" if plan.status == "planned" else "needs_review"
-        supersedes_memory_id = None
-        version = 1
-        if plan.target_memory_id and plan.action in {"MERGE", "UPDATE", "SUPERSEDE"}:
-            supersedes_memory_id = plan.target_memory_id
-            target = self.store.get_record(memory_id=plan.target_memory_id)
-            if target:
-                version = int(target["version"]) + 1
-        elif existing and plan.action in {"ADD", "UPDATE", "MERGE", "SUPERSEDE"}:
-            supersedes_memory_id = existing["memory_id"]
-            version = int(existing["version"]) + 1
-        record = self.store.insert_memory_record(
-            scope=plan.scope,
-            namespace=namespace,
-            memory_type=plan.type,
-            key=key,
-            value=plan.text,
-            status=status,
-            confidence=plan.confidence,
-            version=version,
-            source_plan_id=plan.plan_id,
-            supersedes_memory_id=supersedes_memory_id,
-            payload=plan.to_dict(),
-        )
+        record = self.store.get_record_by_source_plan(source_plan_id=plan.plan_id)
+        supersedes_memory_id = record.get("supersedes_memory_id") if record else None
+        if not record:
+            existing = self.store.find_active_record(scope=plan.scope, namespace=namespace, memory_type=plan.type, key=key)
+            status = "active" if plan.status == "planned" else "needs_review"
+            version = 1
+            if plan.target_memory_id and plan.action in {"MERGE", "UPDATE", "SUPERSEDE"}:
+                supersedes_memory_id = plan.target_memory_id
+                target = self.store.get_record(memory_id=plan.target_memory_id)
+                if target:
+                    version = int(target["version"]) + 1
+            elif existing and plan.action in {"ADD", "UPDATE", "MERGE", "SUPERSEDE"}:
+                supersedes_memory_id = existing["memory_id"]
+                version = int(existing["version"]) + 1
+            record = self.store.insert_memory_record(
+                scope=plan.scope,
+                namespace=namespace,
+                memory_type=plan.type,
+                key=key,
+                value=plan.text,
+                status=status,
+                confidence=plan.confidence,
+                version=version,
+                source_plan_id=plan.plan_id,
+                supersedes_memory_id=supersedes_memory_id,
+                payload=plan.to_dict(),
+            )
+            result.canonical_writes += 1
+            result.reindex_jobs += self._enqueue_job("refresh_kv_shortcut", "canonical_record_mutated", memory_id=record["memory_id"], plan=plan)
         if supersedes_memory_id:
             self.store.mark_record_status(
                 memory_id=supersedes_memory_id,
                 status="superseded",
                 superseded_by_memory_id=record["memory_id"],
             )
-            self.store.insert_graph_edge(
+            if not self.store.has_graph_edge(
                 memory_id=record["memory_id"],
                 episode_id=plan.evidence_episode_ids[0],
                 relation_type="supersedes",
+                source_plan_id=plan.plan_id,
                 target_memory_id=supersedes_memory_id,
-                plan=plan,
-            )
-            result.graph_edges += 1
+            ):
+                self.store.insert_graph_edge(
+                    memory_id=record["memory_id"],
+                    episode_id=plan.evidence_episode_ids[0],
+                    relation_type="supersedes",
+                    target_memory_id=supersedes_memory_id,
+                    plan=plan,
+                )
+                result.graph_edges += 1
         if plan.action == "DELETE":
             self.store.mark_record_status(memory_id=record["memory_id"], status="deleted")
         for episode_id in plan.evidence_episode_ids:
+            if self.store.has_evidence_link(memory_id=record["memory_id"], episode_id=episode_id, plan_id=plan.plan_id):
+                continue
             self.store.insert_evidence_link(memory_id=record["memory_id"], episode_id=episode_id, plan_id=plan.plan_id)
             result.evidence_links += 1
-        result.canonical_writes += 1
-        result.reindex_jobs += self._enqueue_job("refresh_kv_shortcut", "canonical_record_mutated", memory_id=record["memory_id"], plan=plan)
         return record["memory_id"]
 
     def _enqueue_job(

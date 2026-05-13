@@ -196,6 +196,48 @@ class MemorySQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_memory_graph_relation
                 ON memory_graph_edges(scope, relation_type, status);
 
+                CREATE TABLE IF NOT EXISTS memory_dag_nodes (
+                    node_id TEXT PRIMARY KEY,
+                    node_kind TEXT NOT NULL,
+                    ref_id TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    source_plan_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    UNIQUE(node_kind, ref_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_memory_dag_nodes_lookup
+                ON memory_dag_nodes(node_kind, ref_id, status);
+
+                CREATE TABLE IF NOT EXISTS memory_dag_edges (
+                    dag_edge_id TEXT PRIMARY KEY,
+                    source_node_id TEXT NOT NULL,
+                    target_node_id TEXT NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    source_plan_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    valid_from TEXT,
+                    valid_until TEXT,
+                    payload_json TEXT NOT NULL,
+                    UNIQUE(source_node_id, target_node_id, edge_type, source_plan_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_memory_dag_edges_source
+                ON memory_dag_edges(source_node_id, status);
+
+                CREATE INDEX IF NOT EXISTS idx_memory_dag_edges_target
+                ON memory_dag_edges(target_node_id, status);
+
+                CREATE INDEX IF NOT EXISTS idx_memory_dag_edges_type
+                ON memory_dag_edges(scope, edge_type, status);
+
                 CREATE TABLE IF NOT EXISTS memory_file_suggestions (
                     suggestion_id TEXT PRIMARY KEY,
                     source_plan_id TEXT NOT NULL,
@@ -592,6 +634,86 @@ class MemorySQLiteStore:
             ).fetchone()
             return row is not None
 
+    def get_or_create_dag_node(
+        self,
+        *,
+        node_kind: str,
+        ref_id: str,
+        scope: str,
+        label: str,
+        source_plan_id: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM memory_dag_nodes WHERE node_kind = ? AND ref_id = ? LIMIT 1",
+                (node_kind, ref_id),
+            ).fetchone()
+            if row:
+                node = _row_to_dict(row)
+                node["_created"] = False
+                return node
+            now = utc_now()
+            node = {
+                "node_id": f"dag_node_{uuid.uuid4().hex}",
+                "node_kind": node_kind,
+                "ref_id": ref_id,
+                "scope": scope,
+                "label": label,
+                "status": "active",
+                "source_plan_id": source_plan_id,
+                "created_at": now,
+                "updated_at": now,
+                "payload_json": json.dumps(payload or {}, ensure_ascii=False),
+            }
+            conn.execute(
+                """
+                INSERT INTO memory_dag_nodes (
+                    node_id, node_kind, ref_id, scope, label, status, source_plan_id,
+                    created_at, updated_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                tuple(node.values()),
+            )
+            node["_created"] = True
+            return node
+
+    def has_dag_edge(self, *, source_node_id: str, target_node_id: str, edge_type: str, source_plan_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM memory_dag_edges
+                WHERE source_node_id = ?
+                  AND target_node_id = ?
+                  AND edge_type = ?
+                  AND source_plan_id = ?
+                  AND status = 'active'
+                LIMIT 1
+                """,
+                (source_node_id, target_node_id, edge_type, source_plan_id),
+            ).fetchone()
+            return row is not None
+
+    def dag_edge_creates_cycle(self, *, source_node_id: str, target_node_id: str) -> bool:
+        if source_node_id == target_node_id:
+            return True
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                WITH RECURSIVE reachable(node_id) AS (
+                    SELECT target_node_id FROM memory_dag_edges
+                    WHERE source_node_id = ? AND status = 'active'
+                    UNION
+                    SELECT e.target_node_id FROM memory_dag_edges e
+                    JOIN reachable r ON e.source_node_id = r.node_id
+                    WHERE e.status = 'active'
+                )
+                SELECT 1 FROM reachable WHERE node_id = ? LIMIT 1
+                """,
+                (target_node_id, source_node_id),
+            ).fetchone()
+            return rows is not None
+
     def has_review_item(self, *, source_plan_id: str, status: str = "pending_review") -> bool:
         with self._connect() as conn:
             row = conn.execute(
@@ -713,6 +835,45 @@ class MemorySQLiteStore:
                 SELECT * FROM memory_graph_edges
                 WHERE {' AND '.join(clauses)}
                 ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [_row_to_dict(row) for row in rows]
+
+    def search_dag_edges(self, *, query: str, scopes: List[str], limit: int) -> List[Dict[str, Any]]:
+        terms = _query_terms(query)
+        clauses = ["e.status = 'active'", "s.status = 'active'", "t.status = 'active'"]
+        params: List[Any] = []
+        if scopes:
+            clauses.append(f"e.scope IN ({','.join(['?'] * len(scopes))})")
+            params.extend(scopes)
+        if terms:
+            term_clauses = []
+            for term in terms:
+                term_clauses.append(
+                    "(LOWER(e.edge_type) LIKE ? OR LOWER(e.payload_json) LIKE ? OR LOWER(s.label) LIKE ? OR LOWER(t.label) LIKE ?)"
+                )
+                pattern = f"%{term}%"
+                params.extend([pattern, pattern, pattern, pattern])
+            clauses.append(f"({' OR '.join(term_clauses)})")
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    e.*,
+                    s.node_kind AS source_node_kind,
+                    s.ref_id AS source_ref_id,
+                    s.label AS source_label,
+                    t.node_kind AS target_node_kind,
+                    t.ref_id AS target_ref_id,
+                    t.label AS target_label
+                FROM memory_dag_edges e
+                JOIN memory_dag_nodes s ON s.node_id = e.source_node_id
+                JOIN memory_dag_nodes t ON t.node_id = e.target_node_id
+                WHERE {' AND '.join(clauses)}
+                ORDER BY e.created_at DESC
                 LIMIT ?
                 """,
                 params,
@@ -885,6 +1046,43 @@ class MemorySQLiteStore:
             )
         return edge_id
 
+    def insert_dag_edge(
+        self,
+        *,
+        source_node_id: str,
+        target_node_id: str,
+        edge_type: str,
+        scope: str,
+        confidence: float,
+        source_plan_id: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        edge_id = f"dag_edge_{uuid.uuid4().hex}"
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_dag_edges (
+                    dag_edge_id, source_node_id, target_node_id, edge_type, scope, confidence,
+                    status, source_plan_id, created_at, valid_from, valid_until, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    edge_id,
+                    source_node_id,
+                    target_node_id,
+                    edge_type,
+                    scope,
+                    confidence,
+                    "active",
+                    source_plan_id,
+                    utc_now(),
+                    None,
+                    None,
+                    json.dumps(payload or {}, ensure_ascii=False),
+                ),
+            )
+        return edge_id
+
     def insert_file_suggestion(
         self,
         *,
@@ -993,6 +1191,8 @@ class MemorySQLiteStore:
             "memory_evidence_links",
             "memory_vector_projections",
             "memory_graph_edges",
+            "memory_dag_nodes",
+            "memory_dag_edges",
             "memory_file_suggestions",
             "memory_review_items",
             "memory_reindex_jobs",

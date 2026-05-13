@@ -44,6 +44,7 @@ MEMORY_LAYERS = {
     "semantic",
     "insight",
     "relation",
+    "dag",
     "file",
     "non_memory",
 }

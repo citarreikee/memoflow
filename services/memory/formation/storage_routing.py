@@ -15,7 +15,7 @@ STATE_KV = "state_kv"
 DAG = "dag"
 REVIEW_QUEUE = "review_queue"
 
-IMPLEMENTED_CANONICAL_STORES = {EPISODE_LOG, SEMANTIC_KV, RELATION_GRAPH, FILE_MEMORY, STATE_KV}
+IMPLEMENTED_CANONICAL_STORES = {EPISODE_LOG, SEMANTIC_KV, RELATION_GRAPH, FILE_MEMORY, STATE_KV, DAG}
 
 
 GRAPH_RELATION_MARKERS = (
@@ -86,6 +86,7 @@ LAYER_ROUTE_MATRIX: Dict[str, RoutingMatrixEntry] = {
     "semantic": RoutingMatrixEntry(SEMANTIC_KV, [EPISODE_LOG, VECTOR_PROJECTION]),
     "insight": RoutingMatrixEntry(SEMANTIC_KV, [EPISODE_LOG, VECTOR_PROJECTION]),
     "relation": RoutingMatrixEntry(RELATION_GRAPH, [EPISODE_LOG]),
+    "dag": RoutingMatrixEntry(DAG, [EPISODE_LOG, RELATION_GRAPH]),
     "file": RoutingMatrixEntry(FILE_MEMORY, [EPISODE_LOG, VECTOR_PROJECTION]),
     "non_memory": RoutingMatrixEntry(None, [], ["non_memory"]),
 }
@@ -209,10 +210,10 @@ def _shape_from_intent(candidate: MemoryCandidateLite, *, fallback: Optional[str
         return None, [], []
     if intent == VECTOR_PROJECTION:
         return fallback, [VECTOR_PROJECTION], ["vector_projection_not_source_of_truth"]
+    if intent == DAG:
+        return DAG, [EPISODE_LOG, RELATION_GRAPH], []
     if intent in IMPLEMENTED_CANONICAL_STORES:
         return intent, [], []
-    if intent == DAG:
-        return fallback, [RELATION_GRAPH], ["dag_projection_only"]
     if intent == REVIEW_QUEUE:
         return None, [EPISODE_LOG], ["review_queue_required"]
     return fallback, [], []
@@ -265,7 +266,6 @@ def _unsupported_routes(blocked_reasons: List[str]) -> List[str]:
     routes: List[str] = []
     reason_to_route = {
         "state_kv_downgraded_to_semantic_kv": STATE_KV,
-        "dag_projection_only": DAG,
         "vector_projection_not_source_of_truth": VECTOR_PROJECTION,
     }
     for reason in blocked_reasons:

@@ -101,9 +101,9 @@ def test_storage_routing_matrix_degrades_unimplemented_intents() -> None:
         storage_intent="dag",
     )
     dag_shape = plan_storage_shape(dag)
-    assert dag_shape.canonical_store == "episode_log"
+    assert dag_shape.canonical_store == "dag"
     assert "relation_graph" in dag_shape.projections
-    assert "dag_projection_only" in dag_shape.blocked_reasons
+    assert "dag_projection_only" not in dag_shape.blocked_reasons
 
     vector = MemoryCandidateLite(
         text="Search surface hint for runtime compaction.",

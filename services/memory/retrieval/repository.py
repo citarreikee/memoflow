@@ -114,6 +114,31 @@ class MemoryRetrievalRepository:
                     source_priority=0.9,
                 )
             )
+        dag_rows = self.store.search_dag_edges(
+            query=plan.intent.query,
+            scopes=plan.scopes,
+            limit=plan.limit_per_path,
+        )
+        for row in dag_rows:
+            text = _dag_edge_text(row)
+            score = lexical_score(plan.intent.query, text) or 0.4
+            candidates.append(
+                RetrievalCandidate(
+                    source="dag_one_hop",
+                    memory_id=row.get("source_ref_id") if row.get("source_node_kind") == "memory" else None,
+                    projection_id=None,
+                    edge_id=str(row.get("dag_edge_id") or ""),
+                    scope=str(row.get("scope") or ""),
+                    memory_type="dependency_dag",
+                    text=text,
+                    score=score,
+                    reason="dag_edge_match",
+                    payload=dict(row),
+                    authority="authoritative",
+                    intent="dependency_relations",
+                    source_priority=0.95,
+                )
+            )
         return candidates
 
     def _search_review_items(self, plan: RetrievalPlan) -> List[RetrievalCandidate]:
@@ -152,3 +177,10 @@ def _candidate_intent(plan: RetrievalPlan) -> str:
     if plan.intent.intents:
         return plan.intent.intents[0]
     return plan.intent.kind
+
+
+def _dag_edge_text(row: dict) -> str:
+    source = str(row.get("source_label") or row.get("source_ref_id") or "").strip()
+    target = str(row.get("target_label") or row.get("target_ref_id") or "").strip()
+    edge_type = str(row.get("edge_type") or "depends_on").strip()
+    return f"{source} {edge_type} {target}".strip()

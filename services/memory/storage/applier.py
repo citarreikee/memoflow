@@ -15,6 +15,8 @@ class MemoryApplyResult:
     evidence_links: int = 0
     vector_projections: int = 0
     graph_edges: int = 0
+    dag_nodes: int = 0
+    dag_edges: int = 0
     file_suggestions: int = 0
     review_items: int = 0
     reindex_jobs: int = 0
@@ -28,6 +30,8 @@ class MemoryApplyResult:
             "evidence_links": self.evidence_links,
             "vector_projections": self.vector_projections,
             "graph_edges": self.graph_edges,
+            "dag_nodes": self.dag_nodes,
+            "dag_edges": self.dag_edges,
             "file_suggestions": self.file_suggestions,
             "review_items": self.review_items,
             "reindex_jobs": self.reindex_jobs,
@@ -169,6 +173,8 @@ class MemoryWriteApplier:
         if plan.canonical_store == "file_memory":
             self.store.insert_file_suggestion(session_id=session_id, workspace_dir=workspace_dir, plan=plan)
             result.file_suggestions += 1
+        if plan.canonical_store == "dag":
+            self._apply_dag(memory_id=memory_id, plan=plan, result=result)
         self._apply_graph_relations(memory_id=memory_id, plan=plan, result=result, relations=relations)
         if "vector_projection" in plan.projections:
             self._apply_vector_projection(memory_id=memory_id, plan=plan, result=result)
@@ -214,6 +220,8 @@ class MemoryWriteApplier:
         if plan.canonical_store == "file_memory":
             self.store.insert_file_suggestion(session_id=session_id, workspace_dir=workspace_dir, plan=plan)
             result.file_suggestions += 1
+        if plan.canonical_store == "dag":
+            self._apply_dag(memory_id=memory_id, plan=plan, result=result)
         return memory_id
 
     def _apply_projections(self, *, memory_id: Optional[str], plan: MemoryWritePlan, result: MemoryApplyResult) -> None:
@@ -221,8 +229,61 @@ class MemoryWriteApplier:
         if plan.canonical_store == "relation_graph" or "relation_graph" in projection_stores:
             self._apply_graph_relations(memory_id=memory_id, plan=plan, result=result, relations=_relations_for_plan(plan))
 
+        if "dag" in projection_stores:
+            self._apply_dag(memory_id=memory_id, plan=plan, result=result)
+
         if plan.canonical_store == "vector_projection" or "vector_projection" in projection_stores:
             self._apply_vector_projection(memory_id=memory_id, plan=plan, result=result)
+
+    def _apply_dag(self, *, memory_id: Optional[str], plan: MemoryWritePlan, result: MemoryApplyResult) -> None:
+        source_ref_id = memory_id or plan.plan_id
+        source_kind = "memory" if memory_id else "plan"
+        source_node = self.store.get_or_create_dag_node(
+            node_kind=source_kind,
+            ref_id=source_ref_id,
+            scope=plan.scope,
+            label=plan.text,
+            source_plan_id=plan.plan_id,
+            payload=plan.to_dict(),
+        )
+        if source_node.get("_created"):
+            result.dag_nodes += 1
+        relations = _relations_for_plan(plan) or [{"relation_type": "derived_from", "target_memory_id": episode_id} for episode_id in plan.evidence_episode_ids]
+        for relation in relations:
+            relation_type = relation.get("relation_type") or "derived_from"
+            target_ref_id = relation.get("target_memory_id") or plan.target_memory_id or plan.evidence_episode_ids[0]
+            target_kind = "memory" if relation.get("target_memory_id") or plan.target_memory_id else "episode"
+            target_node = self.store.get_or_create_dag_node(
+                node_kind=target_kind,
+                ref_id=target_ref_id,
+                scope=plan.scope,
+                label=target_ref_id,
+                source_plan_id=plan.plan_id,
+                payload={"source_plan_id": plan.plan_id, "relation": relation},
+            )
+            if target_node.get("_created"):
+                result.dag_nodes += 1
+            if self.store.has_dag_edge(
+                source_node_id=source_node["node_id"],
+                target_node_id=target_node["node_id"],
+                edge_type=relation_type,
+                source_plan_id=plan.plan_id,
+            ):
+                continue
+            if self.store.dag_edge_creates_cycle(source_node_id=source_node["node_id"], target_node_id=target_node["node_id"]):
+                self._block(result, "dag_cycle_detected")
+                continue
+            self.store.insert_dag_edge(
+                source_node_id=source_node["node_id"],
+                target_node_id=target_node["node_id"],
+                edge_type=relation_type,
+                scope=plan.scope,
+                confidence=plan.confidence,
+                source_plan_id=plan.plan_id,
+                payload=plan.to_dict(),
+            )
+            result.dag_edges += 1
+            result.reindex_jobs += self._enqueue_job("refresh_dag", "dag_edge_created", memory_id=memory_id, plan=plan)
 
     def _apply_graph_relations(
         self,

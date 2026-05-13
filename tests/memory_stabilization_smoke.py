@@ -268,6 +268,47 @@ def test_bad_write_plan_is_blocked() -> None:
         assert store.count_rows("memory_vector_projections") == 0
 
 
+def test_dag_write_plan_persists_nodes_and_edges() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
+        plan = MemoryWritePlan(
+            plan_id="plan_dag",
+            candidate_id="cand_dag",
+            action="ADD",
+            canonical_store="dag",
+            projections=["episode_log", "relation_graph"],
+            scope="project",
+            evidence_episode_ids=["ep_source"],
+            confidence=0.91,
+            status="planned",
+            type="decision",
+            text="Decision A depends_on Decision B.",
+            reason="test",
+            graph_relations=[{"relation_type": "depends_on", "target_memory_id": "mem_decision_b"}],
+            storage_route={"projection_writes": [{"store": "relation_graph"}]},
+        )
+
+        result = MemoryWriteApplier(store).apply_plans(session_id="session-a", workspace_dir=tmp, plans=[plan])
+
+        assert result.blocked_count == 0
+        assert result.dag_nodes == 2
+        assert result.dag_edges == 1
+        assert store.count_rows("memory_dag_nodes") == 2
+        assert store.count_rows("memory_dag_edges") == 1
+        assert store.count_rows("memory_graph_edges") == 1
+        dag_edges = store.search_dag_edges(query="depends_on", scopes=["project"], limit=10)
+        assert len(dag_edges) == 1
+        assert dag_edges[0]["source_node_kind"] == "plan"
+
+        replay = MemoryWriteApplier(store).apply_plans(session_id="session-a", workspace_dir=tmp, plans=[plan])
+
+        assert replay.blocked_count == 0
+        assert replay.dag_nodes == 0
+        assert replay.dag_edges == 0
+        assert store.count_rows("memory_dag_nodes") == 2
+        assert store.count_rows("memory_dag_edges") == 1
+
+
 def _add_turn(manager: SessionManager, store: SessionStore, session_id: str, user_text: str, assistant_text: str) -> None:
     session = manager.get_session(session_id)
     assert session is not None
@@ -285,6 +326,7 @@ def main() -> None:
     asyncio.run(test_retrieval_empty_store_is_non_blocking())
     test_retrieval_budget_omits_extra_items()
     test_bad_write_plan_is_blocked()
+    test_dag_write_plan_persists_nodes_and_edges()
     print("memory stabilization smoke ok")
 
 

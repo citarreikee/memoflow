@@ -135,7 +135,7 @@ def test_review_route_becomes_review_write_plan() -> None:
     assert "review_queue_required" in write_plan.needs_review_reasons
 
 
-def test_dag_route_is_explicit_projection_downgrade() -> None:
+def test_dag_route_is_source_of_truth_with_graph_projection() -> None:
     route = plan_storage_route(
         candidate(
             text="Decision A supersedes Decision B.",
@@ -145,11 +145,13 @@ def test_dag_route_is_explicit_projection_downgrade() -> None:
         )
     )
 
-    assert route.canonical_store == "episode_log"
-    assert route.source_of_truth_store == "episode_log"
-    assert "dag" in route.unsupported_routes
+    assert route.canonical_store == "dag"
+    assert route.source_of_truth_store == "dag"
+    assert route.canonical_write == {"store": "dag", "role": "source_of_truth"}
+    assert "dag" not in route.unsupported_routes
+    assert "episode_log" in route.projections
     assert "relation_graph" in route.projections
-    assert "dag_projection_only" in route.blocked_reasons
+    assert "dag_projection_only" not in route.blocked_reasons
 
 
 def test_write_plan_carries_storage_route_trace() -> None:
@@ -177,7 +179,7 @@ def main() -> None:
     test_vector_intent_is_projection_not_source_of_truth()
     test_review_queue_route_requires_review_without_canonical_write()
     test_review_route_becomes_review_write_plan()
-    test_dag_route_is_explicit_projection_downgrade()
+    test_dag_route_is_source_of_truth_with_graph_projection()
     test_write_plan_carries_storage_route_trace()
     print("memory storage routing contract ok")
 

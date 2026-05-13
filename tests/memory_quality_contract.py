@@ -87,8 +87,8 @@ def test_storage_routing_matrix_degrades_unimplemented_intents() -> None:
         storage_intent="state_kv",
     )
     state_shape = plan_storage_shape(state)
-    assert state_shape.canonical_store == "semantic_kv"
-    assert "state_kv_downgraded_to_semantic_kv" in state_shape.blocked_reasons
+    assert state_shape.canonical_store == "state_kv"
+    assert "state_kv_downgraded_to_semantic_kv" not in state_shape.blocked_reasons
 
     dag = MemoryCandidateLite(
         text="Decision A supersedes Decision B.",

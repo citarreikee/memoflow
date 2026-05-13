@@ -159,7 +159,7 @@ class MemoryWriteApplier:
             self._block(result, "link_relation_missing")
             return
         memory_id = None
-        if plan.canonical_store in {"semantic_kv", "episode_log", "relation_graph", "vector_projection"}:
+        if _is_record_canonical_store(plan.canonical_store):
             memory_id = self._apply_canonical_record(
                 session_id=session_id,
                 workspace_dir=workspace_dir,
@@ -203,7 +203,7 @@ class MemoryWriteApplier:
         result: MemoryApplyResult,
     ) -> Optional[str]:
         memory_id: Optional[str] = None
-        if plan.canonical_store in {"semantic_kv", "episode_log", "relation_graph", "vector_projection"}:
+        if _is_record_canonical_store(plan.canonical_store):
             memory_id = self._apply_canonical_record(
                 session_id=session_id,
                 workspace_dir=workspace_dir,
@@ -409,6 +409,10 @@ def _has_review_write(plan: MemoryWritePlan) -> bool:
         return False
     review_write = plan.storage_route.get("review_write")
     return isinstance(review_write, dict) and review_write.get("store") == "review_queue"
+
+
+def _is_record_canonical_store(store: Optional[str]) -> bool:
+    return store in {"semantic_kv", "state_kv", "episode_log", "relation_graph", "vector_projection"}
 
 
 def _infer_relation_type(text: str) -> str:

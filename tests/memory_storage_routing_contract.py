@@ -66,7 +66,7 @@ def test_project_rule_routes_to_file_source() -> None:
     assert {"store": "episode_log", "role": "evidence", "source_of_truth": False} in route.projection_writes
 
 
-def test_state_kv_is_explicitly_downgraded_until_store_exists() -> None:
+def test_state_kv_routes_to_state_source_of_truth() -> None:
     route = plan_storage_route(
         candidate(
             text="Task state: storage routing matrix is being implemented.",
@@ -76,10 +76,11 @@ def test_state_kv_is_explicitly_downgraded_until_store_exists() -> None:
         )
     )
 
-    assert route.canonical_store == "semantic_kv"
-    assert route.source_of_truth_store == "semantic_kv"
-    assert "state_kv" in route.unsupported_routes
-    assert "state_kv_downgraded_to_semantic_kv" in route.blocked_reasons
+    assert route.canonical_store == "state_kv"
+    assert route.source_of_truth_store == "state_kv"
+    assert route.canonical_write == {"store": "state_kv", "role": "source_of_truth"}
+    assert "state_kv" not in route.unsupported_routes
+    assert "state_kv_downgraded_to_semantic_kv" not in route.blocked_reasons
 
 
 def test_vector_intent_is_projection_not_source_of_truth() -> None:
@@ -162,18 +163,17 @@ def test_write_plan_carries_storage_route_trace() -> None:
         evidence_episode_ids=["ep_route"],
     )
 
-    assert write_plan.canonical_store == "semantic_kv"
-    assert write_plan.storage_route["source_of_truth_store"] == "semantic_kv"
-    assert write_plan.storage_route["canonical_write"] == {"store": "semantic_kv", "role": "source_of_truth"}
+    assert write_plan.canonical_store == "state_kv"
+    assert write_plan.storage_route["source_of_truth_store"] == "state_kv"
+    assert write_plan.storage_route["canonical_write"] == {"store": "state_kv", "role": "source_of_truth"}
     assert {"store": "episode_log", "role": "evidence", "source_of_truth": False} in write_plan.storage_route["projection_writes"]
-    assert "state_kv" in write_plan.storage_route["unsupported_routes"]
-    assert "state_kv_downgraded_to_semantic_kv" in write_plan.storage_route["blocked_reasons"]
+    assert "state_kv" not in write_plan.storage_route["unsupported_routes"]
 
 
 def main() -> None:
     test_preference_routes_to_semantic_source_with_vector_projection()
     test_project_rule_routes_to_file_source()
-    test_state_kv_is_explicitly_downgraded_until_store_exists()
+    test_state_kv_routes_to_state_source_of_truth()
     test_vector_intent_is_projection_not_source_of_truth()
     test_review_queue_route_requires_review_without_canonical_write()
     test_review_route_becomes_review_write_plan()

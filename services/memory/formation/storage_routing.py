@@ -15,7 +15,7 @@ STATE_KV = "state_kv"
 DAG = "dag"
 REVIEW_QUEUE = "review_queue"
 
-IMPLEMENTED_CANONICAL_STORES = {EPISODE_LOG, SEMANTIC_KV, RELATION_GRAPH, FILE_MEMORY}
+IMPLEMENTED_CANONICAL_STORES = {EPISODE_LOG, SEMANTIC_KV, RELATION_GRAPH, FILE_MEMORY, STATE_KV}
 
 
 GRAPH_RELATION_MARKERS = (
@@ -82,7 +82,7 @@ class RoutingMatrixEntry:
 LAYER_ROUTE_MATRIX: Dict[str, RoutingMatrixEntry] = {
     "raw": RoutingMatrixEntry(EPISODE_LOG, []),
     "event": RoutingMatrixEntry(EPISODE_LOG, [EPISODE_LOG, VECTOR_PROJECTION]),
-    "state": RoutingMatrixEntry(SEMANTIC_KV, [EPISODE_LOG], ["state_kv_downgraded_to_semantic_kv"]),
+    "state": RoutingMatrixEntry(STATE_KV, [EPISODE_LOG]),
     "semantic": RoutingMatrixEntry(SEMANTIC_KV, [EPISODE_LOG, VECTOR_PROJECTION]),
     "insight": RoutingMatrixEntry(SEMANTIC_KV, [EPISODE_LOG, VECTOR_PROJECTION]),
     "relation": RoutingMatrixEntry(RELATION_GRAPH, [EPISODE_LOG]),
@@ -211,8 +211,6 @@ def _shape_from_intent(candidate: MemoryCandidateLite, *, fallback: Optional[str
         return fallback, [VECTOR_PROJECTION], ["vector_projection_not_source_of_truth"]
     if intent in IMPLEMENTED_CANONICAL_STORES:
         return intent, [], []
-    if intent == STATE_KV:
-        return SEMANTIC_KV, [EPISODE_LOG], ["state_kv_downgraded_to_semantic_kv"]
     if intent == DAG:
         return fallback, [RELATION_GRAPH], ["dag_projection_only"]
     if intent == REVIEW_QUEUE:

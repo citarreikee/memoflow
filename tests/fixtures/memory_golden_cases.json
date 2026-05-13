@@ -118,7 +118,7 @@
     ],
     "expected": {
       "status": "planned",
-      "canonical_store": "semantic_kv",
+      "canonical_store": "state_kv",
       "projections_include": [
         "episode_log"
       ],

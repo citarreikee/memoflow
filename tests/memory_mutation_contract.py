@@ -236,6 +236,39 @@ def test_apply_uses_storage_route_projection_writes() -> None:
         assert store.count_rows("memory_vector_projections") == 1
 
 
+def test_state_kv_canonical_write_persists_record() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
+        applier = MemoryWriteApplier(store)
+        plan = make_plan(
+            plan_id="state_kv",
+            action="ADD",
+            text="Task state: state_kv route is canonical.",
+            canonical_store="state_kv",
+            projections=["episode_log"],
+        )
+        plan.type = "task_state"
+        plan.storage_route = {
+            "canonical_write": {"store": "state_kv", "role": "source_of_truth"},
+            "projection_writes": [{"store": "episode_log", "role": "evidence", "source_of_truth": False}],
+            "source_of_truth_store": "state_kv",
+        }
+
+        result = applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[plan])
+        records = store.search_active_records(
+            query="Task state",
+            namespace="",
+            scopes=["project"],
+            memory_types=["task_state"],
+            limit=10,
+        )
+
+        assert result.canonical_writes == 1
+        assert len(records) == 1
+        assert records[0]["type"] == "task_state"
+        assert records[0]["source_plan_id"] == "state_kv"
+
+
 def test_review_and_conflict_are_persisted_without_canonical_mutation() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
@@ -323,6 +356,7 @@ def main() -> None:
     test_supersede_replay_does_not_duplicate_edges_or_records()
     test_link_writes_relation_without_fake_semantic_record()
     test_apply_uses_storage_route_projection_writes()
+    test_state_kv_canonical_write_persists_record()
     test_review_and_conflict_are_persisted_without_canonical_mutation()
     test_review_write_route_is_persisted_without_action_sentinel()
     test_review_replay_is_idempotent()

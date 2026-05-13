@@ -52,6 +52,7 @@ class StorageRoute:
     source_of_truth_store: Optional[str] = None
     canonical_write: Optional[Dict[str, object]] = None
     projection_writes: List[Dict[str, object]] = field(default_factory=list)
+    review_write: Optional[Dict[str, object]] = None
     unsupported_routes: List[str] = field(default_factory=list)
     review_required: bool = False
     routing_reason: str = ""
@@ -64,6 +65,7 @@ class StorageRoute:
             "source_of_truth_store": self.source_of_truth_store,
             "canonical_write": self.canonical_write,
             "projection_writes": self.projection_writes,
+            "review_write": self.review_write,
             "unsupported_routes": self.unsupported_routes,
             "review_required": self.review_required,
             "routing_reason": self.routing_reason,
@@ -152,6 +154,7 @@ def plan_storage_route(
 
     projections = _dedupe(projections)
     blocked_reasons = _dedupe(blocked_reasons)
+    review_write = _review_write(blocked_reasons)
     return StorageRoute(
         canonical_store=canonical_store,
         projections=projections,
@@ -159,8 +162,9 @@ def plan_storage_route(
         source_of_truth_store=canonical_store,
         canonical_write=_canonical_write(canonical_store),
         projection_writes=_projection_writes(projections, canonical_store=canonical_store),
+        review_write=review_write,
         unsupported_routes=_unsupported_routes(blocked_reasons),
-        review_required=canonical_store is None and bool(projections),
+        review_required=review_write is not None,
         routing_reason=_routing_reason(candidate=candidate, write_strategy=write_strategy, memory_layers=memory_layers),
     )
 
@@ -212,7 +216,7 @@ def _shape_from_intent(candidate: MemoryCandidateLite, *, fallback: Optional[str
     if intent == DAG:
         return fallback, [RELATION_GRAPH], ["dag_projection_only"]
     if intent == REVIEW_QUEUE:
-        return None, [EPISODE_LOG], ["review_queue_not_implemented"]
+        return None, [EPISODE_LOG], ["review_queue_required"]
     return fallback, [], []
 
 
@@ -227,7 +231,7 @@ def _shape_from_write_strategy(
     if strategy == "do_not_write":
         return None, [], ["write_strategy_do_not_write"]
     if strategy == "needs_review":
-        return None, [EPISODE_LOG], ["review_queue_not_implemented"]
+        return None, [EPISODE_LOG], ["review_queue_required"]
     if strategy == "link_as_relation":
         return RELATION_GRAPH, [EPISODE_LOG], []
     if strategy == "mark_conflict":
@@ -264,9 +268,7 @@ def _unsupported_routes(blocked_reasons: List[str]) -> List[str]:
     reason_to_route = {
         "state_kv_downgraded_to_semantic_kv": STATE_KV,
         "dag_projection_only": DAG,
-        "review_queue_not_implemented": REVIEW_QUEUE,
         "vector_projection_not_source_of_truth": VECTOR_PROJECTION,
-        "conflict_requires_review": REVIEW_QUEUE,
     }
     for reason in blocked_reasons:
         route = reason_to_route.get(reason)
@@ -298,6 +300,16 @@ def _projection_writes(projections: List[str], *, canonical_store: Optional[str]
             }
         )
     return writes
+
+
+def _review_write(blocked_reasons: List[str]) -> Optional[Dict[str, object]]:
+    if "review_queue_required" not in blocked_reasons and "conflict_requires_review" not in blocked_reasons:
+        return None
+    return {
+        "store": REVIEW_QUEUE,
+        "role": "human_review",
+        "source_of_truth": False,
+    }
 
 
 def _routing_reason(

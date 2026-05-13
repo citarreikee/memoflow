@@ -69,7 +69,7 @@ class MemoryWriteApplier:
             result.blocked_count += 1
             result.blocked_reasons.append("evidence_missing")
             return
-        if plan.status == "needs_review" or plan.action in {"CONFLICT", "NEEDS_REVIEW"}:
+        if _has_review_write(plan) or plan.status == "needs_review" or plan.action in {"CONFLICT", "NEEDS_REVIEW"}:
             self._apply_review_item(session_id=session_id, plan=plan, result=result)
             return
 
@@ -402,6 +402,13 @@ def _projection_stores(plan: MemoryWritePlan) -> List[str]:
         if store not in stores:
             stores.append(store)
     return stores
+
+
+def _has_review_write(plan: MemoryWritePlan) -> bool:
+    if not isinstance(plan.storage_route, dict):
+        return False
+    review_write = plan.storage_route.get("review_write")
+    return isinstance(review_write, dict) and review_write.get("store") == "review_queue"
 
 
 def _infer_relation_type(text: str) -> str:

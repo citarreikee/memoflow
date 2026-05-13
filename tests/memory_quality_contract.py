@@ -134,7 +134,7 @@ def test_storage_routing_preview_respects_write_strategy_gate() -> None:
     review_shape = plan_storage_shape(candidate, write_strategy="needs_review", memory_layers=["semantic"])
     assert review_shape.canonical_store is None
     assert "episode_log" in review_shape.projections
-    assert "review_queue_not_implemented" in review_shape.blocked_reasons
+    assert "review_queue_required" in review_shape.blocked_reasons
 
     conflict_shape = plan_storage_shape(candidate, write_strategy="mark_conflict", memory_layers=["semantic"])
     assert conflict_shape.canonical_store is None

@@ -44,6 +44,10 @@ def build_write_plan(
         if integration_plan.action in REVIEW_INTEGRATION_ACTIONS and not needs_review_reasons:
             needs_review_reasons.append(f"integration_{integration_plan.action.lower()}")
 
+    if shape.review_required and status == "planned":
+        status = "needs_review"
+        if not needs_review_reasons:
+            needs_review_reasons.append("review_queue_required")
     if shape.canonical_store is None and status == "planned":
         status = "blocked"
         blocked_reasons.append("canonical_store_missing")

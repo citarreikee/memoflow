@@ -112,8 +112,26 @@ def test_review_queue_route_requires_review_without_canonical_write() -> None:
     assert route.source_of_truth_store is None
     assert route.canonical_write is None
     assert route.review_required
-    assert "review_queue" in route.unsupported_routes
+    assert route.review_write == {"store": "review_queue", "role": "human_review", "source_of_truth": False}
+    assert "review_queue" not in route.unsupported_routes
     assert "episode_log" in route.projections
+
+
+def test_review_route_becomes_review_write_plan() -> None:
+    write_plan = build_write_plan(
+        candidate(
+            text="This possible roadmap conflict should wait for review.",
+            memory_type="decision",
+            layer="event",
+            intent="review_queue",
+        ),
+        evidence_episode_ids=["ep_review_route"],
+    )
+
+    assert write_plan.status == "needs_review"
+    assert write_plan.canonical_store is None
+    assert write_plan.storage_route["review_write"] == {"store": "review_queue", "role": "human_review", "source_of_truth": False}
+    assert "review_queue_required" in write_plan.needs_review_reasons
 
 
 def test_dag_route_is_explicit_projection_downgrade() -> None:
@@ -158,6 +176,7 @@ def main() -> None:
     test_state_kv_is_explicitly_downgraded_until_store_exists()
     test_vector_intent_is_projection_not_source_of_truth()
     test_review_queue_route_requires_review_without_canonical_write()
+    test_review_route_becomes_review_write_plan()
     test_dag_route_is_explicit_projection_downgrade()
     test_write_plan_carries_storage_route_trace()
     print("memory storage routing contract ok")

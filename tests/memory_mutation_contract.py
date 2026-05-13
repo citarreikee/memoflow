@@ -266,6 +266,32 @@ def test_review_and_conflict_are_persisted_without_canonical_mutation() -> None:
         assert store.count_rows("memory_review_items") == 2
 
 
+def test_review_write_route_is_persisted_without_action_sentinel() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
+        applier = MemoryWriteApplier(store)
+        review = make_plan(
+            plan_id="route_review",
+            action="ADD",
+            text="Decision: possible conflict should wait for routed review.",
+            status="planned",
+            canonical_store=None,
+            projections=["episode_log"],
+            needs_review_reasons=["review_queue_required"],
+        )
+        review.storage_route = {
+            "review_write": {"store": "review_queue", "role": "human_review", "source_of_truth": False},
+            "projection_writes": [{"store": "episode_log", "role": "evidence", "source_of_truth": False}],
+        }
+
+        result = applier.apply_plans(session_id="session-a", workspace_dir=tmp, plans=[review])
+
+        assert result.review_items == 1
+        assert result.canonical_writes == 0
+        assert store.count_rows("memory_records") == 0
+        assert store.count_rows("memory_review_items") == 1
+
+
 def test_review_replay_is_idempotent() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = MemorySQLiteStore(tmp, db_path=str(Path(tmp) / "memory.sqlite3"))
@@ -298,6 +324,7 @@ def main() -> None:
     test_link_writes_relation_without_fake_semantic_record()
     test_apply_uses_storage_route_projection_writes()
     test_review_and_conflict_are_persisted_without_canonical_mutation()
+    test_review_write_route_is_persisted_without_action_sentinel()
     test_review_replay_is_idempotent()
     print("memory mutation contract ok")
 
